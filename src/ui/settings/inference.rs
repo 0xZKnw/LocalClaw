@@ -132,31 +132,34 @@ pub fn InferenceSettings() -> Element {
 
                 // Max Tokens Input
                 div { class: "mb-6 space-y-2",
-                    label { class: "font-medium block text-[var(--text-primary)]", "Max Tokens" }
+                    label { class: "font-medium block text-[var(--text-primary)]", "Max Tokens (Output)" }
                     input {
                         r#type: "number",
                         min: "1",
-                        max: "4096",
+                        max: "65536",
                         value: "{max_tokens}",
                         oninput: move |e| {
-                            let value = e.value().parse().unwrap_or(2048);
+                            let value = e.value().parse().unwrap_or(65536);
                             let mut settings = app_state_max_tokens.settings.write();
-                            settings.max_tokens = value;
+                            settings.max_tokens = value.clamp(1, 65536);
                             if let Err(error) = save_settings(&settings) {
                                 tracing::error!("Failed to save settings: {}", error);
                             }
                         },
                         class: "w-full p-3 rounded-lg bg-white/[0.05] border border-white/[0.12] text-[var(--text-primary)] focus:border-[var(--accent-primary)] focus:ring-1 focus:ring-[var(--accent-primary)] transition-all outline-none",
                     }
+                    p { class: "text-xs text-[var(--text-secondary)] opacity-70",
+                        "Maximum number of tokens to generate in the response. Up to 64k tokens."
+                    }
                 }
 
                 // Context Size Dropdown
                 div { class: "mb-6 space-y-2",
-                    label { class: "font-medium block text-[var(--text-primary)]", "Context Window" }
+                    label { class: "font-medium block text-[var(--text-primary)]", "Context Window Size" }
                     select {
                         value: "{context_size}",
                         onchange: move |e| {
-                            let value = e.value().parse().unwrap_or(4096);
+                            let value = e.value().parse().unwrap_or(131072);
                             let mut settings = app_state_context_size.settings.write();
                             settings.context_size = value;
                             if let Err(error) = save_settings(&settings) {
@@ -165,10 +168,16 @@ pub fn InferenceSettings() -> Element {
                         },
                         class: "w-full p-3 rounded-lg bg-white/[0.05] border border-white/[0.12] text-[var(--text-primary)] focus:border-[var(--accent-primary)] focus:ring-1 focus:ring-[var(--accent-primary)] transition-all outline-none",
                         style: "color-scheme: dark;", // Ensures dropdown options are dark in dark mode
-                        option { value: "2048", "2048 Tokens" }
-                        option { value: "4096", "4096 Tokens (Default)" }
-                        option { value: "8192", "8192 Tokens" }
-                        option { value: "16384", "16384 Tokens" }
+                        option { value: "2048", "2K Tokens" }
+                        option { value: "4096", "4K Tokens" }
+                        option { value: "8192", "8K Tokens" }
+                        option { value: "16384", "16K Tokens" }
+                        option { value: "32768", "32K Tokens" }
+                        option { value: "65536", "64K Tokens" }
+                        option { value: "131072", "128K Tokens (Default)" }
+                    }
+                    p { class: "text-xs text-[var(--text-secondary)] opacity-70",
+                        "Maximum context window size. 128K allows for very long conversations and large inputs."
                     }
                 }
 

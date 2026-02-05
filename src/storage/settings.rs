@@ -38,8 +38,8 @@ impl Default for AppSettings {
             temperature: 0.7,
             top_p: 0.9,
             top_k: 40,
-            max_tokens: 2048,
-            context_size: 4096,
+            max_tokens: 65536,    // 64k max output tokens
+            context_size: 131072, // 128k context window
             system_prompt: "You are a helpful AI assistant.".to_string(),
             gpu_layers: 99, // Offload all layers to GPU by default
             models_directory: get_data_dir()
@@ -68,12 +68,17 @@ impl AppSettings {
             self.top_k = 40;
         }
 
-        if self.max_tokens == 0 {
-            self.max_tokens = 2048;
-        }
+        // Clamp max_tokens between 1 and 65536 (64k)
+        self.max_tokens = self.max_tokens.clamp(1, 65536);
 
-        if self.context_size == 0 {
-            self.context_size = 4096;
+        // Valid context sizes: 2048, 4096, 8192, 16384, 32768, 65536, 131072
+        let valid_context_sizes = [2048, 4096, 8192, 16384, 32768, 65536, 131072];
+        if !valid_context_sizes.contains(&self.context_size) {
+            // Find closest valid size
+            self.context_size = *valid_context_sizes
+                .iter()
+                .min_by_key(|&&size| (size as i64 - self.context_size as i64).abs())
+                .unwrap_or(&131072);
         }
 
         // Validate theme
