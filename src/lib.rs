@@ -2,6 +2,7 @@
 //!
 //! Core library for the LocaLM desktop application.
 
+pub mod agent;
 pub mod app;
 pub mod inference;
 pub mod storage;
