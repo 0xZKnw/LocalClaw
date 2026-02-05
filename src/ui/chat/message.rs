@@ -150,23 +150,22 @@ pub fn MessageBubble(message: Message) -> Element {
     let is_user = message.role == MessageRole::User;
 
     let container_class = if is_user {
-        "flex flex-row-reverse items-end gap-3 mb-6 animate-slide-in-right"
+        "flex flex-row-reverse items-start gap-3 mb-6 animate-slide-in-right"
     } else {
-        "flex flex-row items-end gap-3 mb-6 animate-slide-in-left"
+        "flex flex-row items-start gap-3 mb-6 animate-slide-in-left"
     };
 
     let bubble_class = if is_user {
-        "max-w-[75%] bg-gradient-to-br from-[#8B5CF6] to-[#6366F1] text-white rounded-2xl rounded-br-md px-5 py-3 shadow-lg shadow-purple-500/30 animate-slide-in-right"
+        "max-w-[80%] bg-gradient-to-br from-[#8B5CF6] to-[#6366F1] text-white rounded-2xl rounded-br-sm px-4 py-3 shadow-lg shadow-purple-500/20"
     } else {
-        "max-w-[85%] bg-white/[0.04] backdrop-blur-md border border-white/[0.08] rounded-2xl rounded-bl-md px-5 py-3 shadow-md animate-slide-in-left"
+        "max-w-[80%] bg-[#1F2937] border border-gray-700/50 rounded-2xl rounded-bl-sm px-4 py-3"
     };
 
-    let avatar_class = "w-9 h-9 rounded-xl flex items-center justify-center text-sm font-bold shadow-md select-none transition-transform hover:scale-105 ".to_string() +
-        if is_user { 
-            "bg-gradient-to-br from-[#8B5CF6] to-[#6366F1] text-white" 
-        } else { 
-            "bg-gradient-to-br from-[#10B981] to-[#059669] text-white" 
-        };
+    let avatar_class = if is_user {
+        "w-8 h-8 rounded-full bg-gradient-to-br from-[#8B5CF6] to-[#6366F1] flex items-center justify-center text-white text-xs font-medium"
+    } else {
+        "w-8 h-8 rounded-full bg-[#10B981] flex items-center justify-center text-white text-xs font-medium"
+    };
 
     // Parse content for AI messages only
     let content_parts = if !is_user {
@@ -184,16 +183,16 @@ pub fn MessageBubble(message: Message) -> Element {
                     class: "{avatar_class}",
 
                     if is_user {
-                        svg { width: "20", height: "20", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "2", path { d: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" }, circle { cx: "12", cy: "7", r: "4" } }
+                        svg { width: "16", height: "16", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "2", path { d: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" }, circle { cx: "12", cy: "7", r: "4" } }
                     } else {
-                        svg { width: "20", height: "20", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "2", path { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" } }
+                        svg { width: "16", height: "16", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "2", path { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" } }
                     }
                 }
             }
 
             // Message Content
             div {
-                class: "flex flex-col " .to_string() + if is_user { "items-end" } else { "items-start" },
+                class: "flex flex-col",
 
                 div {
                     class: "{bubble_class}",
@@ -211,6 +210,12 @@ pub fn MessageBubble(message: Message) -> Element {
                             },
                         }
                     }
+                }
+
+                // Optional: Add timestamp below
+                span {
+                    class: "text-xs text-[var(--text-tertiary)] mt-1 opacity-0 group-hover:opacity-100 transition-opacity",
+                    "12:34 PM"
                 }
             }
         }
