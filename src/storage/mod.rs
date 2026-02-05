@@ -6,6 +6,7 @@ use std::path::PathBuf;
 use thiserror::Error;
 
 pub mod conversations;
+pub mod huggingface;
 pub mod models;
 pub mod settings;
 

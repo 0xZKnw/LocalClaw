@@ -17,7 +17,7 @@ chrono = { version = "0.4", features = ["serde"] }
 llama-cpp-2 = { version = "=0.1.132", features = ["sampler"] }
 
 # Agent/AI capabilities
-reqwest = { version = "0.12", features = ["json"] }
+reqwest = { version = "0.12", features = ["json", "stream"] }
 schemars = "0.8"
 async-trait = "0.1"
 dashmap = "6"
