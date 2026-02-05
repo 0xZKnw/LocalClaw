@@ -658,7 +658,8 @@ mod tests {
     #[test]
     fn test_generation_params_default() {
         let params = GenerationParams::default();
-        assert_eq!(params.max_tokens, 512);
+        assert_eq!(params.max_tokens, 65536);
+        assert_eq!(params.max_context_size, 131072);
         assert!((params.temperature - 0.7).abs() < 0.001);
         assert_eq!(params.top_k, 40);
         assert!((params.top_p - 0.95).abs() < 0.001);
