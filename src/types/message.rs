@@ -16,7 +16,7 @@ pub enum Role {
 }
 
 /// A single chat message
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Message {
     /// The role of the message sender
     pub role: Role,

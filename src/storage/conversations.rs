@@ -11,7 +11,7 @@ use std::path::PathBuf;
 use uuid::Uuid;
 
 /// A chat conversation
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Conversation {
     /// Unique identifier for the conversation
     pub id: String,

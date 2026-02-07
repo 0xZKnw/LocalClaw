@@ -42,18 +42,17 @@ pub fn ConversationList() -> Element {
 
     rsx! {
         div {
-            class: "flex-1 overflow-y-auto p-2 space-y-1 custom-scrollbar",
-            style: "scrollbar-width: thin;",
+            class: "flex-1 overflow-y-auto p-2 space-y-1 scrollbar-thin",
 
             if conversations.is_empty() {
                 div {
-                    class: "flex flex-col items-center justify-center py-8 text-[var(--text-tertiary)] gap-2 opacity-60",
+                    class: "flex flex-col items-center justify-center py-10 text-[var(--text-tertiary)] gap-2 opacity-50",
                     svg { width: "24", height: "24", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "1.5", stroke_dasharray: "4 4", circle { cx: "12", cy: "12", r: "10" } }
                     span { class: "text-xs font-medium", "No recent chats" }
                 }
             } else {
                 div {
-                    class: "text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] font-bold px-3 py-2 select-none opacity-80",
+                    class: "text-[10px] uppercase tracking-widest text-[var(--text-tertiary)] font-semibold px-3 py-2 select-none opacity-60",
                     "Recent"
                 }
 
@@ -63,15 +62,10 @@ pub fn ConversationList() -> Element {
                         .map(|id| id == &conversation.id)
                         .unwrap_or(false);
 
-                    // Glassmorphism item styles
-                    // Base: bg-white/[0.02] border-transparent
-                    // Hover: bg-white/[0.06] border-white/[0.08] translate-x-1
-                    // Selected: bg-white/[0.1] border-white/[0.1] (stronger glass)
-
                     let row_class = if is_selected {
-                        "group flex items-center gap-3 px-3 py-2.5 rounded-lg bg-white/[0.08] border border-white/[0.1] text-[var(--text-primary)] cursor-pointer transition-all duration-150 shadow-sm backdrop-blur-sm"
+                        "group flex items-center gap-2.5 px-3 py-2 rounded-lg bg-white/[0.08] border-l-2 border-[var(--accent-primary)] text-[var(--text-primary)] cursor-pointer transition-all"
                     } else {
-                        "group flex items-center gap-3 px-3 py-2.5 rounded-lg bg-white/[0.02] hover:bg-white/[0.06] border border-transparent hover:border-white/[0.08] text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer transition-all duration-150 hover:translate-x-1"
+                        "group flex items-center gap-2.5 px-3 py-2 rounded-lg hover:bg-white/[0.05] border-l-2 border-transparent text-[var(--text-secondary)] hover:text-[var(--text-primary)] cursor-pointer transition-all"
                     };
 
                     let conversation_for_select = conversation.clone();
@@ -82,7 +76,7 @@ pub fn ConversationList() -> Element {
                     rsx! {
                         div {
                             key: "{conversation.id}",
-                            class: "relative px-1",
+                            class: "px-1",
                             onclick: move |_| {
                                 current_conversation_signal.set(Some(conversation_for_select.clone()));
                             },
@@ -93,8 +87,8 @@ pub fn ConversationList() -> Element {
                                 div {
                                     class: "shrink-0 " .to_string() + if is_selected { "text-[var(--accent-primary)]" } else { "text-[var(--text-tertiary)] group-hover:text-[var(--text-secondary)]" },
                                     svg {
-                                        width: "16",
-                                        height: "16",
+                                        width: "14",
+                                        height: "14",
                                         view_box: "0 0 24 24",
                                         fill: "none",
                                         stroke: "currentColor",
@@ -107,13 +101,13 @@ pub fn ConversationList() -> Element {
 
                                 // Title
                                 div {
-                                    class: "truncate flex-1",
+                                    class: "truncate flex-1 text-sm",
                                     "{conversation.title}"
                                 }
 
                                 button {
-                                    class: "opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded hover:bg-white/[0.1] text-[var(--text-tertiary)] hover:text-[var(--text-error)]",
-                                    title: "Delete conversation",
+                                    class: "opacity-0 group-hover:opacity-100 transition-opacity p-1 rounded-md hover:bg-white/[0.08] text-[var(--text-tertiary)] hover:text-[var(--text-error)]",
+                                    title: if app_state.settings.read().language == "en" { "Delete conversation" } else { "Supprimer la conversation" },
                                     onclick: move |evt| {
                                         evt.stop_propagation();
                                         if let Err(e) = delete_conversation(&conversation_id) {
@@ -132,8 +126,8 @@ pub fn ConversationList() -> Element {
                                         }
                                     },
                                     svg {
-                                        width: "14",
-                                        height: "14",
+                                        width: "12",
+                                        height: "12",
                                         view_box: "0 0 24 24",
                                         fill: "none",
                                         stroke: "currentColor",

@@ -3,10 +3,10 @@
 //! Provides functionality to download GGUF models from HuggingFace Hub.
 
 use crate::storage::get_data_dir;
-use serde::Deserialize;
 use std::fs;
-use std::io::Write;
 use std::path::PathBuf;
+use tokio::fs::File;
+use tokio::io::AsyncWriteExt;
 
 /// Parse a HuggingFace URL to extract model info
 #[derive(Debug, Clone)]
@@ -14,6 +14,39 @@ pub struct HuggingFaceUrl {
     pub repo_id: String,
     pub filename: String,
     pub revision: String,
+}
+
+fn sanitize_local_filename(filename: &str) -> Result<String, String> {
+    let trimmed = filename.trim();
+    if trimmed.is_empty() {
+        return Err("Invalid model filename".to_string());
+    }
+
+    let no_query = trimmed.split('?').next().unwrap_or(trimmed);
+    let no_fragment = no_query.split('#').next().unwrap_or(no_query);
+    let no_leading = no_fragment.trim_start_matches('/');
+
+    let flattened = no_leading.replace('\\', "/").replace('/', "__");
+
+    let mut sanitized = String::with_capacity(flattened.len());
+    for ch in flattened.chars() {
+        let invalid = matches!(ch, '<' | '>' | ':' | '"' | '/' | '\\' | '|' | '?' | '*');
+        if invalid || ch.is_control() {
+            sanitized.push('_');
+        } else {
+            sanitized.push(ch);
+        }
+    }
+
+    while sanitized.ends_with('.') || sanitized.ends_with(' ') {
+        sanitized.pop();
+    }
+
+    if sanitized.is_empty() {
+        return Err("Invalid model filename".to_string());
+    }
+
+    Ok(sanitized)
 }
 
 impl HuggingFaceUrl {
@@ -26,6 +59,8 @@ impl HuggingFaceUrl {
         // 4. username/repo
 
         let url = url.trim();
+        let url = url.split('?').next().unwrap_or(url);
+        let url = url.split('#').next().unwrap_or(url);
 
         // Try to extract from full URL
         if url.contains("huggingface.co") {
@@ -126,6 +161,8 @@ pub async fn download_model(
         hf_url.repo_id, hf_url.revision, filename
     );
 
+    let safe_filename = sanitize_local_filename(&filename)?;
+
     // Get models directory
     let models_dir = get_data_dir()
         .map_err(|e| format!("Failed to get data dir: {}", e))?
@@ -133,15 +170,26 @@ pub async fn download_model(
 
     fs::create_dir_all(&models_dir).map_err(|e| format!("Failed to create models dir: {}", e))?;
 
-    let output_path = models_dir.join(&filename);
+    let output_path = models_dir.join(&safe_filename);
+    let temp_path = models_dir.join(format!("{}.tmp", safe_filename));
 
-    // Check if file already exists
+    // Check if file already exists and has content
     if output_path.exists() {
-        return Ok(output_path);
+        let metadata = fs::metadata(&output_path)
+            .map_err(|e| format!("Failed to check existing file: {}", e))?;
+        if metadata.len() > 0 {
+            tracing::info!("Model already exists: {:?}", output_path);
+            return Ok(output_path);
+        }
     }
 
     // Download the file
-    let client = reqwest::Client::new();
+    tracing::info!("Downloading from: {}", download_url);
+    let client = reqwest::Client::builder()
+        .timeout(std::time::Duration::from_secs(3600)) // 1 hour timeout for large models
+        .build()
+        .map_err(|e| format!("Failed to create HTTP client: {}", e))?;
+    
     let response = client
         .get(&download_url)
         .header("User-Agent", "LocaLM/0.2.0")
@@ -156,15 +204,45 @@ pub async fn download_model(
     let total_size = response
         .content_length()
         .ok_or("Could not determine file size")?;
-
-    let mut file = fs::File::create(&output_path)
-        .map_err(|e| format!("Failed to create file: {}", e))?;
-
-    let bytes = response.bytes().await.map_err(|e| format!("Download error: {}", e))?;
     
-    file.write_all(&bytes).map_err(|e| format!("Write error: {}", e))?;
-    let downloaded = bytes.len() as u64;
-    progress_callback(downloaded, total_size);
+    tracing::info!("File size: {} bytes ({} MB)", total_size, total_size / 1024 / 1024);
+
+    // Write to temp file first
+    let mut temp_file = File::create(&temp_path)
+        .await
+        .map_err(|e| format!("Failed to create temp file: {}", e))?;
+    
+    let mut response = response;
+    let mut downloaded: u64 = 0;
+    while let Some(chunk) = response
+        .chunk()
+        .await
+        .map_err(|e| format!("Download error: {}", e))?
+    {
+        temp_file
+            .write_all(&chunk)
+            .await
+            .map_err(|e| format!("Write error: {}", e))?;
+        downloaded += chunk.len() as u64;
+        progress_callback(downloaded, total_size);
+    }
+    temp_file
+        .flush()
+        .await
+        .map_err(|e| format!("Write error: {}", e))?;
+
+    if downloaded != total_size {
+        return Err(format!(
+            "Download incomplete: got {} bytes, expected {}",
+            downloaded, total_size
+        ));
+    }
+    
+    // Rename temp file to final location (atomic operation)
+    fs::rename(&temp_path, &output_path)
+        .map_err(|e| format!("Failed to move downloaded file: {}", e))?;
+    
+    tracing::info!("Download complete: {:?}", output_path);
 
     Ok(output_path)
 }

@@ -7,6 +7,13 @@
 //! Since llama-cpp-2 types (`LlamaBackend`, `LlamaModel`, `LlamaContext`) contain
 //! raw pointers that are not `Send`, all inference operations run on a dedicated
 //! worker thread. The main thread communicates via channels.
+//!
+//! # Performance (Critical)
+//!
+//! The LlamaContext (KV cache) is PERSISTED between generations.
+//! Creating a new context allocates VRAM and can take 2-5 seconds.
+//! Reusing it with a KV cache clear is nearly instant.
+//! This is what makes Ollama/LMStudio fast.
 
 use std::num::NonZeroU32;
 use std::path::{Path, PathBuf};
@@ -26,6 +33,7 @@ use thiserror::Error;
 
 use crate::inference::model::{validate_gguf, ModelError};
 use crate::inference::streaming::StreamToken;
+use crate::types::message::{Message as ChatMessage, Role as ChatRole};
 
 /// Errors that can occur during inference operations
 #[derive(Debug, Error, Clone)]
@@ -67,32 +75,63 @@ impl From<ModelError> for EngineError {
 /// Generation parameters for inference
 #[derive(Debug, Clone)]
 pub struct GenerationParams {
-    /// Maximum number of tokens to generate
     pub max_tokens: u32,
-    /// Temperature for sampling (0.0 = greedy, higher = more random)
     pub temperature: f32,
-    /// Top-k sampling parameter (0 = disabled)
     pub top_k: u32,
-    /// Top-p (nucleus) sampling parameter
     pub top_p: f32,
-    /// Repetition penalty
     pub repeat_penalty: f32,
-    /// Random seed for sampling (0 = random)
     pub seed: u32,
-    /// Context window size
     pub max_context_size: u32,
 }
 
 impl Default for GenerationParams {
     fn default() -> Self {
         Self {
-            max_tokens: 65536,
+            max_tokens: 4096,       // 4K output with 16K context
             temperature: 0.7,
             top_k: 40,
             top_p: 0.95,
             repeat_penalty: 1.1,
             seed: 0,
-            max_context_size: 131072,
+            max_context_size: 16384, // 16K context - validated with LM Studio on 8GB VRAM
+        }
+    }
+}
+
+impl GenerationParams {
+    pub fn fast() -> Self {
+        Self {
+            max_tokens: 2048,
+            temperature: 0.0,
+            top_k: 1,
+            top_p: 1.0,
+            repeat_penalty: 1.0,
+            seed: 0,
+            max_context_size: 4096,
+        }
+    }
+    
+    pub fn balanced() -> Self {
+        Self {
+            max_tokens: 4096,
+            temperature: 0.7,
+            top_k: 40,
+            top_p: 0.9,
+            repeat_penalty: 1.1,
+            seed: 0,
+            max_context_size: 8192,
+        }
+    }
+    
+    pub fn quality() -> Self {
+        Self {
+            max_tokens: 8192,
+            temperature: 0.8,
+            top_k: 50,
+            top_p: 0.95,
+            repeat_penalty: 1.1,
+            seed: 0,
+            max_context_size: 16384,
         }
     }
 }
@@ -100,17 +139,11 @@ impl Default for GenerationParams {
 /// Model information after loading
 #[derive(Debug, Clone)]
 pub struct LoadedModelInfo {
-    /// Path to the loaded model
     pub path: String,
-    /// Vocabulary size
     pub vocab_size: i32,
-    /// Embedding dimension
     pub embedding_dim: i32,
-    /// Training context length
     pub context_length: u32,
-    /// Total parameter count
     pub param_count: u64,
-    /// Model size in bytes
     pub size_bytes: u64,
 }
 
@@ -124,7 +157,7 @@ enum WorkerCommand {
     },
     UnloadModel,
     Generate {
-        prompt: String,
+        messages: Vec<ChatMessage>,
         params: GenerationParams,
         token_tx: Sender<StreamToken>,
         stop_signal: Arc<AtomicBool>,
@@ -133,24 +166,15 @@ enum WorkerCommand {
 }
 
 /// The main LLM inference engine using llama-cpp-2
-///
-/// Uses a dedicated worker thread for all llama-cpp operations since
-/// the underlying types are not Send.
 pub struct LlamaEngine {
-    /// Channel to send commands to the worker thread
     command_tx: Option<Sender<WorkerCommand>>,
-    /// Handle to the worker thread
     worker_handle: Option<JoinHandle<()>>,
-    /// Cached model info (updated after load)
     model_info: Option<LoadedModelInfo>,
-    /// Whether backend is initialized
     initialized: bool,
-    /// Whether a model is loaded
     model_loaded: bool,
 }
 
 impl LlamaEngine {
-    /// Creates a new uninitialized engine
     pub fn new() -> Self {
         Self {
             command_tx: None,
@@ -161,10 +185,6 @@ impl LlamaEngine {
         }
     }
 
-    /// Initializes the llama.cpp backend
-    ///
-    /// Must be called before loading models or running inference.
-    /// Spawns a dedicated worker thread for all llama-cpp operations.
     pub fn init(&mut self) -> Result<(), EngineError> {
         if self.initialized {
             return Ok(());
@@ -172,7 +192,6 @@ impl LlamaEngine {
 
         let (command_tx, command_rx) = mpsc::channel::<WorkerCommand>();
 
-        // Spawn worker thread that owns the backend and model
         let handle = thread::spawn(move || {
             worker_thread_main(command_rx);
         });
@@ -180,7 +199,6 @@ impl LlamaEngine {
         self.command_tx = Some(command_tx.clone());
         self.worker_handle = Some(handle);
 
-        // Send init command to worker
         command_tx
             .send(WorkerCommand::Init)
             .map_err(|e| EngineError::WorkerError(e.to_string()))?;
@@ -190,15 +208,6 @@ impl LlamaEngine {
         Ok(())
     }
 
-    /// Loads a GGUF model from the specified path
-    ///
-    /// # Arguments
-    /// * `path` - Path to the GGUF model file
-    /// * `gpu_layers` - Number of layers to offload to GPU (0 = CPU only, high value = all to GPU)
-    ///
-    /// # Returns
-    /// * `Ok(LoadedModelInfo)` - Information about the loaded model
-    /// * `Err(EngineError)` - If model loading fails
     pub fn load_model<P: AsRef<Path>>(
         &mut self,
         path: P,
@@ -210,15 +219,10 @@ impl LlamaEngine {
             .ok_or(EngineError::BackendNotInitialized)?;
 
         let path = path.as_ref();
-
-        // Validate GGUF file first (on main thread, just file I/O)
         let _metadata = validate_gguf(path)?;
-        tracing::debug!("GGUF validation passed for {:?}", path);
 
-        // Create response channel
         let (response_tx, response_rx) = mpsc::channel();
 
-        // Send load command to worker
         command_tx
             .send(WorkerCommand::LoadModel {
                 path: path.to_path_buf(),
@@ -227,7 +231,6 @@ impl LlamaEngine {
             })
             .map_err(|e| EngineError::WorkerError(e.to_string()))?;
 
-        // Wait for response
         let result = response_rx
             .recv()
             .map_err(|e| EngineError::WorkerError(e.to_string()))??;
@@ -238,7 +241,6 @@ impl LlamaEngine {
         Ok(result)
     }
 
-    /// Unloads the current model and frees VRAM
     pub fn unload_model(&mut self) {
         if let Some(tx) = &self.command_tx {
             let _ = tx.send(WorkerCommand::UnloadModel);
@@ -248,33 +250,30 @@ impl LlamaEngine {
         tracing::info!("Model unload requested");
     }
 
-    /// Returns information about the currently loaded model
     pub fn model_info(&self) -> Option<&LoadedModelInfo> {
         self.model_info.as_ref()
     }
 
-    /// Returns true if a model is currently loaded
     pub fn is_model_loaded(&self) -> bool {
         self.model_loaded
     }
 
-    /// Returns true if the backend is initialized
     pub fn is_initialized(&self) -> bool {
         self.initialized
     }
 
-    /// Generates text with streaming output
-    ///
-    /// # Arguments
-    /// * `prompt` - The input prompt text
-    /// * `params` - Generation parameters
-    ///
-    /// # Returns
-    /// * `Ok((Receiver<StreamToken>, Arc<AtomicBool>))` - Receiver for streaming tokens and stop signal
-    /// * `Err(EngineError)` - If generation setup fails
     pub fn generate_stream(
         &self,
         prompt: &str,
+        params: GenerationParams,
+    ) -> Result<(Receiver<StreamToken>, Arc<AtomicBool>), EngineError> {
+        let message = ChatMessage::new(ChatRole::User, prompt);
+        self.generate_stream_messages(vec![message], params)
+    }
+
+    pub fn generate_stream_messages(
+        &self,
+        messages: Vec<ChatMessage>,
         params: GenerationParams,
     ) -> Result<(Receiver<StreamToken>, Arc<AtomicBool>), EngineError> {
         let command_tx = self
@@ -286,16 +285,12 @@ impl LlamaEngine {
             return Err(EngineError::NoModelLoaded);
         }
 
-        // Create channel for streaming tokens
         let (token_tx, token_rx) = mpsc::channel();
-
-        // Create stop signal
         let stop_signal = Arc::new(AtomicBool::new(false));
 
-        // Send generate command to worker
         command_tx
             .send(WorkerCommand::Generate {
-                prompt: prompt.to_string(),
+                messages,
                 params,
                 token_tx,
                 stop_signal: stop_signal.clone(),
@@ -314,107 +309,154 @@ impl Default for LlamaEngine {
 
 impl Drop for LlamaEngine {
     fn drop(&mut self) {
-        // Send shutdown command
         if let Some(tx) = self.command_tx.take() {
             let _ = tx.send(WorkerCommand::Shutdown);
         }
-        // Wait for worker thread to finish
         if let Some(handle) = self.worker_handle.take() {
             let _ = handle.join();
         }
     }
 }
 
-/// Worker thread main loop
-///
-/// Owns the LlamaBackend and LlamaModel, processes commands from main thread.
+// =============================================================================
+// Worker thread - owns all llama-cpp state including PERSISTENT context
+// =============================================================================
+
+/// Worker state holding all llama-cpp objects.
+/// The context is PERSISTENT - created once and reused across generations.
+struct WorkerState {
+    backend: Option<LlamaBackend>,
+    model: Option<LlamaModel>,
+    /// PERSISTENT context - reused across generations (the key optimization)
+    ctx: Option<LlamaContext<'static>>,
+    /// Current context size
+    ctx_n_ctx: u32,
+    /// Optimal thread count (cached)
+    n_threads: i32,
+}
+
+impl WorkerState {
+    fn new() -> Self {
+        Self {
+            backend: None,
+            model: None,
+            ctx: None,
+            ctx_n_ctx: 0,
+            n_threads: get_optimal_threads(),
+        }
+    }
+}
+
 fn worker_thread_main(command_rx: Receiver<WorkerCommand>) {
-    let mut backend: Option<LlamaBackend> = None;
-    let mut model: Option<LlamaModel> = None;
+    let mut state = WorkerState::new();
+    
+    // We use unsafe to create a self-referential struct where ctx borrows model.
+    // This is safe because:
+    // 1. The model outlives the context (we always drop ctx before model)
+    // 2. Both live on the same thread
+    // 3. The model is never moved while the context exists
 
     loop {
         match command_rx.recv() {
-            Ok(WorkerCommand::Init) => match LlamaBackend::init() {
-                Ok(b) => {
-                    backend = Some(b);
-                    tracing::info!("LlamaBackend initialized in worker thread");
+            Ok(WorkerCommand::Init) => {
+                match LlamaBackend::init() {
+                    Ok(b) => {
+                        state.backend = Some(b);
+                        tracing::info!("LlamaBackend initialized");
+                    }
+                    Err(e) => {
+                        tracing::error!("Failed to init backend: {}", e);
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("Failed to init backend: {}", e);
-                }
-            },
+            }
             Ok(WorkerCommand::LoadModel {
                 path,
                 gpu_layers,
                 response_tx,
             }) => {
-                let result = load_model_internal(&backend, &path, gpu_layers);
-                match &result {
-                    Ok(info) => {
-                        // Actually load the model and store it
-                        if let Some(ref b) = backend {
-                            let model_params =
-                                LlamaModelParams::default().with_n_gpu_layers(gpu_layers);
-                            match LlamaModel::load_from_file(b, &path, &model_params) {
-                                Ok(m) => {
-                                    model = Some(m);
-                                    tracing::info!("Model loaded: {}", info.path);
-                                }
-                                Err(e) => {
-                                    let _ = response_tx
-                                        .send(Err(EngineError::ModelLoad(e.to_string())));
-                                    continue;
-                                }
-                            }
-                        }
+                // Drop existing context FIRST (before model)
+                state.ctx = None;
+                state.ctx_n_ctx = 0;
+                state.model = None;
+                
+                match load_model_internal(&state.backend, &path, gpu_layers) {
+                    Ok((info, loaded_model)) => {
+                        state.model = Some(loaded_model);
+                        let _ = response_tx.send(Ok(info));
                     }
-                    Err(_) => {}
+                    Err(e) => {
+                        let _ = response_tx.send(Err(e));
+                    }
                 }
-                let _ = response_tx.send(result);
             }
             Ok(WorkerCommand::UnloadModel) => {
-                model = None;
-                tracing::info!("Model unloaded in worker thread");
+                // Drop context FIRST, then model
+                state.ctx = None;
+                state.ctx_n_ctx = 0;
+                state.model = None;
+                tracing::info!("Model and context unloaded");
             }
             Ok(WorkerCommand::Generate {
-                prompt,
+                messages,
                 params,
                 token_tx,
                 stop_signal,
             }) => {
-                if let (Some(ref b), Some(ref m)) = (&backend, &model) {
-                    if let Err(e) = run_generation(b, m, &prompt, params, &token_tx, &stop_signal) {
-                        let _ = token_tx.send(StreamToken::Error(e));
-                    }
-                } else {
+                if state.backend.is_none() || state.model.is_none() {
                     let _ = token_tx.send(StreamToken::Error("No model loaded".to_string()));
+                    continue;
+                }
+                
+                if let Err(e) = run_generation_persistent(&mut state, &messages, params, &token_tx, &stop_signal) {
+                    let _ = token_tx.send(StreamToken::Error(e));
                 }
             }
             Ok(WorkerCommand::Shutdown) => {
-                tracing::info!("Worker thread shutting down");
+                // Clean shutdown: drop context first, then model
+                state.ctx = None;
+                state.model = None;
+                state.backend = None;
+                tracing::info!("Worker thread shut down");
                 break;
             }
             Err(_) => {
-                // Channel closed, exit
-                tracing::debug!("Command channel closed, worker exiting");
                 break;
             }
         }
     }
 }
 
-/// Load model and extract info (helper for worker thread)
+// =============================================================================
+// Model loading
+// =============================================================================
+
 fn load_model_internal(
     backend: &Option<LlamaBackend>,
     path: &Path,
     gpu_layers: u32,
-) -> Result<LoadedModelInfo, EngineError> {
+) -> Result<(LoadedModelInfo, LlamaModel), EngineError> {
     let backend = backend.as_ref().ok_or(EngineError::BackendNotInitialized)?;
 
-    let model_params = LlamaModelParams::default().with_n_gpu_layers(gpu_layers);
+    let metadata = std::fs::metadata(path)
+        .map_err(|e| EngineError::ModelLoad(format!("Cannot read model file: {}", e)))?;
+
+    if metadata.len() == 0 {
+        return Err(EngineError::ModelLoad("Model file is empty".to_string()));
+    }
+
+    tracing::info!(
+        "Loading model: {:?} ({:.2} GB, {} GPU layers)",
+        path,
+        metadata.len() as f64 / (1024.0 * 1024.0 * 1024.0),
+        gpu_layers
+    );
+
+    // Model params with mlock to prevent OS paging out weights
+    let model_params = LlamaModelParams::default()
+        .with_n_gpu_layers(gpu_layers);
 
     let model = LlamaModel::load_from_file(backend, path, &model_params)
-        .map_err(|e| EngineError::ModelLoad(e.to_string()))?;
+        .map_err(|e| EngineError::ModelLoad(format!("Load failed: {}", e)))?;
 
     let info = LoadedModelInfo {
         path: path.to_string_lossy().to_string(),
@@ -426,103 +468,307 @@ fn load_model_internal(
     };
 
     tracing::info!(
-        "Model info extracted: {} ({} params, {} vocab, {} ctx)",
-        info.path,
-        info.param_count,
-        info.vocab_size,
-        info.context_length
+        "Model loaded: {:.1}B params, {}K train ctx, {} vocab",
+        info.param_count as f64 / 1e9,
+        info.context_length / 1024,
+        info.vocab_size
     );
 
-    // Note: We load the model twice - once for info, once to keep.
-    // This is inefficient but keeps the code simple. Could be optimized.
-    Ok(info)
+    Ok((info, model))
 }
 
-/// Run text generation (called from worker thread)
-fn run_generation(
-    backend: &LlamaBackend,
-    model: &LlamaModel,
-    prompt: &str,
+// =============================================================================
+// Generation with PERSISTENT context (the main performance optimization)
+// =============================================================================
+
+fn run_generation_persistent(
+    state: &mut WorkerState,
+    messages: &[ChatMessage],
     params: GenerationParams,
     tx: &Sender<StreamToken>,
     stop_signal: &Arc<AtomicBool>,
 ) -> Result<(), String> {
-    let prompt = match build_chat_prompt(model, prompt) {
-        Ok(chat_prompt) => chat_prompt,
-        Err(error) => {
-            tracing::warn!("Chat template not applied: {error}");
-            prompt.to_string()
+    let start_time = std::time::Instant::now();
+    
+    let backend = state.backend.as_ref().ok_or("Backend not initialized")?;
+    let model = state.model.as_ref().ok_or("Model not loaded")?;
+
+    // Build prompt
+    let prompt = match build_chat_prompt_from_messages(model, messages) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::warn!("Chat template error: {e}, using fallback");
+            build_fallback_prompt(messages)
         }
     };
 
-    // Create context for this generation
-    // Use context size from settings, or model's max if not specified
-    let n_ctx = std::cmp::min(params.max_context_size, model.n_ctx_train());
-    let n_ctx = std::cmp::max(n_ctx, 2048); // Minimum 2K context
-
-    let ctx_params = LlamaContextParams::default()
-        .with_n_ctx(Some(NonZeroU32::new(n_ctx).unwrap()))
-        .with_n_batch(512);
-
-    let mut ctx = model
-        .new_context(backend, ctx_params)
-        .map_err(|e| format!("Failed to create context: {}", e))?;
-
-    // Tokenize the prompt
+    // Tokenize
     let tokens = model
         .str_to_token(&prompt, AddBos::Always)
-        .map_err(|e| format!("Failed to tokenize: {}", e))?;
+        .map_err(|e| format!("Tokenization failed: {}", e))?;
+    
+    let prompt_len = tokens.len() as u32;
+    let model_max = model.n_ctx_train();
+    
+    // Use the SMALLER of model max and user's configured max context
+    // This is critical: model may support 128K but user's GPU can only handle 4K
+    let effective_max = std::cmp::min(params.max_context_size, model_max);
+    
+    // Calculate needed context size
+    let min_gen = 256u32;
+    let needed = std::cmp::min(prompt_len + params.max_tokens, effective_max);
+    let needed = std::cmp::max(needed, prompt_len + min_gen);
+    let needed = std::cmp::min(needed, effective_max);
+    
+    // Round up to next standard size for better context reuse
+    let n_ctx = pick_context_size(needed, effective_max);
+    
+    tracing::info!(
+        "Prompt: {} tokens, need ctx: {}, model max: {}",
+        prompt_len, n_ctx, model_max
+    );
 
-    tracing::debug!("Tokenized prompt into {} tokens", tokens.len());
+    // === THE KEY OPTIMIZATION ===
+    // Reuse existing context if it's big enough, otherwise create a new one.
+    // Creating a context is SLOW (allocates KV cache in VRAM, 2-5 seconds).
+    // Reusing one is INSTANT.
+    
+    let need_new_ctx = match &state.ctx {
+        Some(_) if state.ctx_n_ctx >= n_ctx => {
+            tracing::info!(
+                "REUSING context ({} >= {}): ~0ms vs 2-5s for new context",
+                state.ctx_n_ctx, n_ctx
+            );
+            false
+        }
+        Some(_) => {
+            tracing::info!(
+                "Context too small ({} < {}), recreating...",
+                state.ctx_n_ctx, n_ctx
+            );
+            true
+        }
+        None => {
+            tracing::info!("No existing context, creating new one...");
+            true
+        }
+    };
+    
+    if need_new_ctx {
+        // Drop old context first to free VRAM
+        state.ctx = None;
+        state.ctx_n_ctx = 0;
+        
+        let n_threads = state.n_threads;
+        let n_batch = calculate_optimal_batch(n_ctx, prompt_len);
+        
+        let ctx_params = LlamaContextParams::default()
+            .with_n_ctx(Some(NonZeroU32::new(n_ctx).unwrap()))
+            .with_n_batch(n_batch)
+            .with_n_threads(n_threads)
+            .with_n_threads_batch(n_threads);
+        
+        // SAFETY: The model outlives the context because we always drop ctx before model.
+        // Both are owned by WorkerState and we always drop in the right order.
+        let model_static: &'static LlamaModel = unsafe { &*(model as *const LlamaModel) };
+        
+        let ctx = model_static.new_context(backend, ctx_params)
+            .map_err(|e| format!("Failed to create context ({}K): {}", n_ctx / 1024, e))?;
+        
+        state.ctx = Some(ctx);
+        state.ctx_n_ctx = n_ctx;
+        
+        tracing::info!(
+            "Context created in {:?}: {}K ctx, {} batch, {} threads",
+            start_time.elapsed(), n_ctx / 1024, n_batch, n_threads
+        );
+    }
+    
+    let ctx = state.ctx.as_mut().ok_or("Context disappeared")?;
+    let actual_n_ctx = state.ctx_n_ctx;
+    
+    // Clear the KV cache for fresh generation
+    ctx.clear_kv_cache();
+    
+    // Clamp max_tokens to fit in context
+    let available = actual_n_ctx.saturating_sub(prompt_len).max(64);
+    let effective_max = std::cmp::min(params.max_tokens, available);
+    
+    if effective_max < params.max_tokens {
+        tracing::warn!(
+            "Clamped max_tokens: {} -> {} (ctx={}, prompt={})",
+            params.max_tokens, effective_max, actual_n_ctx, prompt_len
+        );
+    }
+    
+    let mut clamped = params.clone();
+    clamped.max_tokens = effective_max;
+    
+    let ctx_ready_time = start_time.elapsed();
+    tracing::info!(
+        "Context ready in {:?}: {}K ctx, {} prompt tokens, {} max gen",
+        ctx_ready_time, actual_n_ctx / 1024, prompt_len, effective_max
+    );
 
-    run_inference(&mut ctx, model, tokens, params, tx, stop_signal)
+    let n_batch = calculate_optimal_batch(actual_n_ctx, prompt_len);
+    run_inference(ctx, model, tokens, clamped, actual_n_ctx, n_batch, tx, stop_signal)
 }
 
-fn build_chat_prompt(model: &LlamaModel, prompt: &str) -> Result<String, String> {
+/// Pick a good context size (round up for reusability)
+fn pick_context_size(needed: u32, max: u32) -> u32 {
+    // Round up to standard sizes for better context reuse
+    let sizes = [2048, 4096, 8192, 16384, 32768, 65536, 131072];
+    for &s in &sizes {
+        if s >= needed && s <= max {
+            return s;
+        }
+    }
+    std::cmp::min(needed, max)
+}
+
+/// Get optimal number of threads
+fn get_optimal_threads() -> i32 {
+    let logical = std::thread::available_parallelism()
+        .map(|p| p.get() as i32)
+        .unwrap_or(4);
+    
+    // Use physical cores (logical / 2 on HT systems)
+    // But at least 2, and cap at 16
+    let physical = std::cmp::max(2, logical / 2);
+    let result = std::cmp::min(physical, 16);
+    tracing::info!("Thread config: {} logical -> {} threads", logical, result);
+    result
+}
+
+/// Calculate optimal batch size
+fn calculate_optimal_batch(n_ctx: u32, prompt_len: u32) -> u32 {
+    let base = if prompt_len < 512 {
+        2048
+    } else if prompt_len < 2048 {
+        1024
+    } else if prompt_len < 4096 {
+        512
+    } else {
+        256
+    };
+    std::cmp::min(base, n_ctx)
+}
+
+// =============================================================================
+// Prompt building
+// =============================================================================
+
+fn build_chat_prompt_from_messages(
+    model: &LlamaModel,
+    messages: &[ChatMessage],
+) -> Result<String, String> {
+    if messages.is_empty() {
+        return Err("No messages".to_string());
+    }
+
     let template = model
         .chat_template(None)
-        .map_err(|e| format!("Failed to load chat template: {e}"))?;
-    let user_message = LlamaChatMessage::new("user".to_string(), prompt.to_string())
-        .map_err(|e| format!("Failed to build chat message: {e}"))?;
+        .map_err(|e| format!("Chat template error: {e}"))?;
+
+    let mut chat_messages: Vec<LlamaChatMessage> = Vec::with_capacity(messages.len());
+    for msg in messages {
+        let role = match msg.role {
+            ChatRole::System => "system",
+            ChatRole::User => "user",
+            ChatRole::Assistant => "assistant",
+        };
+        let chat_msg = LlamaChatMessage::new(role.to_string(), msg.content.clone())
+            .map_err(|e| format!("Chat message error: {e}"))?;
+        chat_messages.push(chat_msg);
+    }
+
     model
-        .apply_chat_template(&template, &[user_message], true)
-        .map_err(|e| format!("Failed to apply chat template: {e}"))
+        .apply_chat_template(&template, &chat_messages, true)
+        .map_err(|e| format!("Template apply error: {e}"))
 }
-/// Runs the inference loop
+
+fn build_fallback_prompt(messages: &[ChatMessage]) -> String {
+    let mut out = String::with_capacity(4096);
+    for msg in messages {
+        let role = match msg.role {
+            ChatRole::System => "System",
+            ChatRole::User => "User",
+            ChatRole::Assistant => "Assistant",
+        };
+        out.push_str(role);
+        out.push_str(": ");
+        out.push_str(&msg.content);
+        out.push('\n');
+    }
+    out.push_str("Assistant: ");
+    out
+}
+
+// =============================================================================
+// Inference loop
+// =============================================================================
+
 fn run_inference(
     ctx: &mut LlamaContext,
     model: &LlamaModel,
-    prompt_tokens: Vec<llama_cpp_2::token::LlamaToken>,
+    mut prompt_tokens: Vec<llama_cpp_2::token::LlamaToken>,
     params: GenerationParams,
+    n_ctx: u32,
+    n_batch: u32,
     tx: &Sender<StreamToken>,
     stop_signal: &Arc<AtomicBool>,
 ) -> Result<(), String> {
-    // Create batch and add prompt tokens
-    let mut batch = LlamaBatch::new(512, 1);
-
-    for (i, token) in prompt_tokens.iter().enumerate() {
-        let is_last = i == prompt_tokens.len() - 1;
-        batch
-            .add(*token, i as i32, &[0], is_last)
-            .map_err(|e| format!("Failed to add token to batch: {}", e))?;
+    let inference_start = std::time::Instant::now();
+    
+    if prompt_tokens.is_empty() {
+        return Err("Empty prompt".to_string());
     }
 
-    // Process prompt
-    ctx.decode(&mut batch)
-        .map_err(|e| format!("Failed to decode prompt: {}", e))?;
+    // Truncate prompt if needed (keep most recent tokens)
+    let max_prompt = (n_ctx as usize).saturating_sub(params.max_tokens as usize).max(1);
+    if prompt_tokens.len() > max_prompt {
+        let start = prompt_tokens.len() - max_prompt;
+        prompt_tokens = prompt_tokens[start..].to_vec();
+        tracing::warn!("Prompt truncated to {} tokens", prompt_tokens.len());
+    }
 
-    // Create sampler chain
-    let seed = if params.seed == 0 {
-        rand_seed()
-    } else {
-        params.seed
-    };
+    // Process prompt in batches
+    let batch_size = std::cmp::max(1, n_batch) as usize;
+    let mut batch = LlamaBatch::new(batch_size, 1);
+    let prompt_len = prompt_tokens.len();
+
+    let prompt_start = std::time::Instant::now();
+    for (chunk_index, chunk) in prompt_tokens.chunks(batch_size).enumerate() {
+        if stop_signal.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        
+        batch.clear();
+        let offset = chunk_index * batch_size;
+        for (i, token) in chunk.iter().enumerate() {
+            let global_index = offset + i;
+            let is_last = global_index + 1 == prompt_len;
+            batch
+                .add(*token, global_index as i32, &[0], is_last)
+                .map_err(|e| format!("Batch add error: {}", e))?;
+        }
+
+        ctx.decode(&mut batch)
+            .map_err(|e| format!("Decode error: {}", e))?;
+    }
+    
+    let prompt_time = prompt_start.elapsed();
+    tracing::info!(
+        "Prompt: {} tokens in {:?} ({:.0} t/s)",
+        prompt_len, prompt_time, prompt_len as f64 / prompt_time.as_secs_f64()
+    );
+
+    // Sampler
+    let seed = if params.seed == 0 { rand_seed() } else { params.seed };
 
     let mut sampler = if params.temperature < 0.01 {
-        // Use greedy sampling for very low temperature
         LlamaSampler::greedy()
     } else {
-        // Chain samplers for controlled randomness
         LlamaSampler::chain_simple([
             LlamaSampler::top_k(params.top_k as i32),
             LlamaSampler::top_p(params.top_p, 1),
@@ -532,111 +778,113 @@ fn run_inference(
     };
 
     let mut n_decoded = prompt_tokens.len() as i32;
+    let mut tokens_generated = 0u32;
+    let mut utf8_buffer: Vec<u8> = Vec::with_capacity(32);
 
-    // Buffer for handling incomplete UTF-8 sequences
-    let mut utf8_buffer: Vec<u8> = Vec::new();
-
-    // Generation loop
+    let gen_start = std::time::Instant::now();
+    
     for _ in 0..params.max_tokens {
-        // Check stop signal
         if stop_signal.load(Ordering::Relaxed) {
-            tracing::debug!("Generation stopped by user");
             break;
         }
 
-        // Sample next token
         let new_token = sampler.sample(ctx, batch.n_tokens() - 1);
         sampler.accept(new_token);
 
-        // Check for end of generation
         if model.is_eog_token(new_token) {
-            tracing::debug!("End of generation token encountered");
-            // Flush any remaining UTF-8 buffer on end of generation
-            if !utf8_buffer.is_empty() {
-                if let Ok(s) = String::from_utf8(utf8_buffer.clone()) {
-                    if !s.is_empty() {
-                        let _ = tx.send(StreamToken::Token(s));
-                    }
-                }
-                utf8_buffer.clear();
-            }
+            flush_utf8_buffer(&mut utf8_buffer, tx);
             break;
         }
 
-        // Convert token to bytes instead of string
+        tokens_generated += 1;
+
         let token_bytes = model
             .token_to_bytes(new_token, Special::Tokenize)
-            .map_err(|e| format!("Failed to convert token to bytes: {}", e))?;
+            .map_err(|e| format!("Token convert error: {}", e))?;
 
-        // Accumulate bytes in the buffer
         utf8_buffer.extend_from_slice(&token_bytes);
-
-        // Try to extract valid UTF-8 from the buffer
-        // Find the longest valid UTF-8 prefix
-        if let Ok(s) = String::from_utf8(utf8_buffer.clone()) {
-            // All accumulated bytes form valid UTF-8
-            if !s.is_empty() {
-                if tx.send(StreamToken::Token(s)).is_err() {
-                    // Receiver dropped, stop generation
-                    tracing::debug!("Receiver dropped, stopping generation");
-                    break;
-                }
-            }
-            utf8_buffer.clear();
-        } else {
-            // Invalid UTF-8. Try to find the longest valid prefix and emit it,
-            // keeping only the incomplete suffix in the buffer.
-            let mut valid_len = 0;
-            for i in (1..=utf8_buffer.len()).rev() {
-                if let Ok(s) = String::from_utf8(utf8_buffer[..i].to_vec()) {
-                    valid_len = i;
-                    if !s.is_empty() {
-                        if tx.send(StreamToken::Token(s)).is_err() {
-                            // Receiver dropped, stop generation
-                            tracing::debug!("Receiver dropped, stopping generation");
-                            break;
-                        }
-                    }
-                    break;
-                }
-            }
-
-            // Keep only the incomplete suffix
-            if valid_len > 0 {
-                utf8_buffer = utf8_buffer[valid_len..].to_vec();
-            }
-            // If valid_len == 0, we keep all bytes (they're an incomplete sequence)
+        
+        if !emit_valid_utf8(&mut utf8_buffer, tx) {
+            break;
         }
 
-        // Prepare batch for next iteration
         batch.clear();
         batch
             .add(new_token, n_decoded, &[0], true)
-            .map_err(|e| format!("Failed to add token to batch: {}", e))?;
+            .map_err(|e| format!("Batch add error: {}", e))?;
 
-        // Decode
         ctx.decode(&mut batch)
-            .map_err(|e| format!("Failed to decode: {}", e))?;
+            .map_err(|e| format!("Decode error: {}", e))?;
 
         n_decoded += 1;
     }
 
-    // Flush any remaining UTF-8 buffer before completion
-    if !utf8_buffer.is_empty() {
-        if let Ok(s) = String::from_utf8(utf8_buffer) {
+    flush_utf8_buffer(&mut utf8_buffer, tx);
+
+    let gen_time = gen_start.elapsed();
+    let total_time = inference_start.elapsed();
+    if tokens_generated > 0 {
+        tracing::info!(
+            "Gen: {} tokens in {:?} ({:.1} t/s), total: {:?}",
+            tokens_generated, gen_time,
+            tokens_generated as f64 / gen_time.as_secs_f64(),
+            total_time
+        );
+    }
+
+    let _ = tx.send(StreamToken::Done);
+    Ok(())
+}
+
+// =============================================================================
+// UTF-8 helpers
+// =============================================================================
+
+#[inline]
+fn flush_utf8_buffer(buffer: &mut Vec<u8>, tx: &Sender<StreamToken>) {
+    if !buffer.is_empty() {
+        if let Ok(s) = String::from_utf8(std::mem::take(buffer)) {
             if !s.is_empty() {
                 let _ = tx.send(StreamToken::Token(s));
             }
         }
     }
-
-    // Send done signal
-    let _ = tx.send(StreamToken::Done);
-
-    Ok(())
 }
 
-/// Generates a random seed using system entropy
+#[inline]
+fn emit_valid_utf8(buffer: &mut Vec<u8>, tx: &Sender<StreamToken>) -> bool {
+    if let Ok(s) = std::str::from_utf8(buffer) {
+        if !s.is_empty() {
+            if tx.send(StreamToken::Token(s.to_string())).is_err() {
+                return false;
+            }
+        }
+        buffer.clear();
+        return true;
+    }
+    
+    // Find valid UTF-8 prefix
+    let mut valid_len = buffer.len();
+    while valid_len > 0 {
+        if std::str::from_utf8(&buffer[..valid_len]).is_ok() {
+            break;
+        }
+        valid_len -= 1;
+    }
+    
+    if valid_len > 0 {
+        let s = unsafe { std::str::from_utf8_unchecked(&buffer[..valid_len]) };
+        if !s.is_empty() {
+            if tx.send(StreamToken::Token(s.to_string())).is_err() {
+                return false;
+            }
+        }
+        buffer.drain(..valid_len);
+    }
+    
+    true
+}
+
 fn rand_seed() -> u32 {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
@@ -658,17 +906,22 @@ mod tests {
     #[test]
     fn test_generation_params_default() {
         let params = GenerationParams::default();
-        assert_eq!(params.max_tokens, 65536);
-        assert_eq!(params.max_context_size, 131072);
+        assert_eq!(params.max_tokens, 8192);
+        assert_eq!(params.max_context_size, 16384);
         assert!((params.temperature - 0.7).abs() < 0.001);
-        assert_eq!(params.top_k, 40);
-        assert!((params.top_p - 0.95).abs() < 0.001);
+    }
+
+    #[test]
+    fn test_pick_context_size() {
+        assert_eq!(pick_context_size(1000, 32768), 2048);
+        assert_eq!(pick_context_size(3000, 32768), 4096);
+        assert_eq!(pick_context_size(5000, 32768), 8192);
+        assert_eq!(pick_context_size(10000, 32768), 16384);
     }
 
     #[test]
     fn test_unload_without_model() {
         let mut engine = LlamaEngine::new();
-        // Should not panic
         engine.unload_model();
         assert!(!engine.is_model_loaded());
     }

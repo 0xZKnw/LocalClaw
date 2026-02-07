@@ -12,6 +12,7 @@ pub fn ModelPicker() -> Element {
     
     let mut models = use_signal(Vec::new);
     let mut selected_model_path = use_signal(|| None::<String>);
+    let mut dropdown_open = use_signal(|| false);
     
     // Download dialog state
     let mut show_download_dialog = use_signal(|| false);
@@ -23,7 +24,6 @@ pub fn ModelPicker() -> Element {
     let models_directory_clone = models_directory.clone();
     use_effect(move || {
         let found_models = scan_models_directory(&models_directory_clone).unwrap_or_default();
-        // Pre-select first model if available and nothing selected yet
         if selected_model_path.read().is_none() {
             if let Some(first_model) = found_models.first() {
                 let path_str = first_model.path.to_string_lossy().to_string();
@@ -104,7 +104,6 @@ pub fn ModelPicker() -> Element {
         
         spawn(async move {
             let result = download_model(&url, |_downloaded, _total| {
-                // Progress callback - simplified for thread safety
             }).await;
             
             is_downloading_inner.set(false);
@@ -113,10 +112,8 @@ pub fn ModelPicker() -> Element {
                 Ok(path) => {
                     tracing::info!("Downloaded model to: {:?}", path);
                     download_success_inner.set(true);
-                    // Refresh model list
                     let found_models = scan_models_directory(&models_directory_inner).unwrap_or_default();
                     models_inner.set(found_models);
-                    // Clear URL after successful download
                     download_url_inner.set(String::new());
                 }
                 Err(e) => {
@@ -129,19 +126,19 @@ pub fn ModelPicker() -> Element {
 
     rsx! {
         div {
-            class: "flex flex-col p-4 border-b border-[var(--border-subtle)] gap-4 bg-[var(--bg-sidebar)]",
+            class: "flex flex-col gap-3",
             
             // Header with Refresh
             div {
                 class: "flex items-center justify-between",
                 span {
-                    class: "text-[10px] uppercase tracking-wider text-[var(--text-tertiary)] font-bold select-none",
-                    "Active Model"
+                    class: "text-[10px] uppercase tracking-widest text-[var(--text-tertiary)] font-semibold select-none",
+                    if app_state.settings.read().language == "en" { "Active Model" } else { "Modele actif" }
                 }
                 button {
                     onclick: handle_refresh,
-                    class: "text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors p-1 rounded-sm hover:bg-[var(--bg-hover)]",
-                    title: "Rescan models",
+                    class: "text-[var(--text-tertiary)] hover:text-[var(--text-primary)] transition-colors p-1 rounded-md hover:bg-white/[0.06]",
+                    title: if app_state.settings.read().language == "en" { "Rescan models" } else { "Re-scanner les modeles" },
                     svg {
                         class: "w-3 h-3",
                         view_box: "0 0 24 24",
@@ -157,56 +154,119 @@ pub fn ModelPicker() -> Element {
                 }
             }
 
-            // Main Content Area
             if models.read().is_empty() {
                 div {
-                    class: "flex flex-col items-center justify-center p-4 border border-dashed border-[var(--border-subtle)] rounded-lg gap-2 bg-[var(--bg-subtle)]",
-                    span { class: "text-sm text-[var(--text-secondary)] font-medium", "No models found" }
-                    span { class: "text-[10px] text-[var(--text-tertiary)] text-center", "Place .gguf files in /models" }
+                    class: "flex flex-col items-center justify-center p-4 border border-dashed border-[var(--border-subtle)] rounded-xl gap-2",
+                    span { class: "text-sm text-[var(--text-secondary)] font-medium",
+                        if app_state.settings.read().language == "en" { "No models found" } else { "Aucun modele trouve" }
+                    }
+                    span { class: "text-[10px] text-[var(--text-tertiary)] text-center",
+                        if app_state.settings.read().language == "en" { "Place .gguf files in /models" } else { "Placez des fichiers .gguf dans /models" }
+                    }
                 }
             } else {
                 div {
-                    class: "flex flex-col gap-3",
+                    class: "flex flex-col gap-2",
                     
-                    // Model Selector
-                    div {
-                        class: "relative group",
-                        select {
-                            class: "w-full appearance-none bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[var(--text-primary)] text-sm rounded-lg py-2.5 pl-3 pr-8 focus:outline-none focus:border-[var(--accent-primary)] focus:ring-1 focus:ring-[var(--accent-primary)] transition-all font-medium truncate disabled:opacity-50 disabled:cursor-not-allowed cursor-pointer hover:border-[var(--border-hover)]",
-                            disabled: matches!(*app_state.model_state.read(), ModelState::Loading | ModelState::Loaded(_)),
-                            onchange: move |evt| selected_model_path.set(Some(evt.value())),
-                            value: selected_model_path.read().clone().unwrap_or_default(),
-                            
-                            for model in models.read().iter() {
-                                option {
-                                    value: "{model.path.to_string_lossy()}",
-                                    "{model.filename}"
+                    // Model Selector — custom dropdown
+                    {
+                        let is_disabled = matches!(*app_state.model_state.read(), ModelState::Loading | ModelState::Loaded(_));
+                        let selected_name = {
+                            let sel = selected_model_path.read();
+                            let mods = models.read();
+                            let fallback = if app_state.settings.read().language == "en" { "Select a model" } else { "Choisir un modele" };
+                            sel.as_ref().and_then(|p| mods.iter().find(|m| m.path.to_string_lossy() == *p).map(|m| m.filename.clone())).unwrap_or_else(|| fallback.to_string())
+                        };
+
+                        rsx! {
+                            div {
+                                class: "relative",
+
+                                // Trigger button
+                                button {
+                                    r#type: "button",
+                                    disabled: is_disabled,
+                                    onclick: move |_| if !is_disabled { dropdown_open.set(!dropdown_open()) },
+                                    class: "w-full flex items-center justify-between gap-2 py-2.5 px-3 rounded-xl text-sm font-medium transition-all cursor-pointer",
+                                    style: "background: var(--bg-tertiary); border: 1px solid var(--border-subtle);",
+                                    onmouseover: move |_| {},
+
+                                    span {
+                                        class: "truncate text-[var(--text-primary)]",
+                                        "{selected_name}"
+                                    }
+                                    svg {
+                                        class: if dropdown_open() { "w-4 h-4 text-[var(--text-tertiary)] transition-transform rotate-180" } else { "w-4 h-4 text-[var(--text-tertiary)] transition-transform" },
+                                        view_box: "0 0 24 24",
+                                        fill: "none",
+                                        stroke: "currentColor",
+                                        stroke_width: "2",
+                                        stroke_linecap: "round",
+                                        stroke_linejoin: "round",
+                                        polyline { points: "6 9 12 15 18 9" }
+                                    }
                                 }
-                            }
-                        }
-                        // Custom Chevron
-                        div {
-                            class: "absolute right-2.5 top-1/2 -translate-y-1/2 pointer-events-none text-[var(--text-tertiary)] group-hover:text-[var(--text-secondary)]",
-                            svg {
-                                class: "w-4 h-4",
-                                view_box: "0 0 24 24",
-                                fill: "none",
-                                stroke: "currentColor",
-                                stroke_width: "2",
-                                stroke_linecap: "round",
-                                stroke_linejoin: "round",
-                                polyline { points: "6 9 12 15 18 9" }
+
+                                // Dropdown panel
+                                if dropdown_open() {
+                                    div {
+                                        class: "absolute left-0 right-0 mt-1 rounded-xl overflow-hidden z-50 animate-fade-in",
+                                        style: "background: var(--bg-elevated); border: 1px solid var(--border-medium); box-shadow: 0 8px 24px -4px rgba(30,25,20,0.3);",
+
+                                        div {
+                                            class: "max-h-48 overflow-y-auto custom-scrollbar py-1",
+
+                                            for model in models.read().iter() {
+                                                {
+                                                    let path_str = model.path.to_string_lossy().to_string();
+                                                    let is_selected = selected_model_path.read().as_ref().map_or(false, |p| *p == path_str);
+                                                    let filename = model.filename.clone();
+                                                    let size = model.size_string();
+
+                                                    rsx! {
+                                                        button {
+                                                            r#type: "button",
+                                                            onclick: {
+                                                                let path_str = path_str.clone();
+                                                                move |_| {
+                                                                    selected_model_path.set(Some(path_str.clone()));
+                                                                    dropdown_open.set(false);
+                                                                }
+                                                            },
+                                                            class: if is_selected {
+                                                                "w-full flex items-center justify-between px-3 py-2 text-left text-sm transition-all"
+                                                            } else {
+                                                                "w-full flex items-center justify-between px-3 py-2 text-left text-sm transition-all"
+                                                            },
+                                                            style: if is_selected {
+                                                                "background: var(--accent-soft); color: var(--accent-primary);"
+                                                            } else {
+                                                                "color: var(--text-primary);"
+                                                            },
+
+                                                            span { class: "truncate font-medium", "{filename}" }
+                                                            span {
+                                                                class: "flex-shrink-0 text-[10px] font-mono text-[var(--text-tertiary)] ml-2",
+                                                                "{size}"
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                     }
 
-                    // Metadata display (Size) - cleaner look
+                    // Size badge
                     if let Some(path) = selected_model_path.read().as_ref() {
                         if let Some(model) = models.read().iter().find(|m| m.path.to_string_lossy() == *path) {
                             div {
                                 class: "flex justify-end",
                                 span {
-                                    class: "px-1.5 py-0.5 rounded text-[10px] font-mono bg-[var(--bg-subtle)] text-[var(--text-tertiary)]",
+                                    class: "px-2 py-0.5 rounded-md text-[10px] font-mono bg-white/[0.03] text-[var(--text-tertiary)] border border-[var(--border-subtle)]",
                                     "{model.size_string()}"
                                 }
                             }
@@ -218,7 +278,7 @@ pub fn ModelPicker() -> Element {
                         ModelState::NotLoaded => rsx! {
                             button {
                                 onclick: handle_load,
-                                class: "w-full flex items-center justify-center gap-2 bg-[var(--bg-surface)] border border-[var(--border-subtle)] hover:border-[var(--accent-primary)] hover:text-[var(--accent-primary)] text-[var(--text-secondary)] text-sm font-medium py-2.5 rounded-lg transition-all active:scale-[0.98] shadow-sm",
+                                class: "w-full flex items-center justify-center gap-2 bg-white/[0.03] border border-[var(--border-subtle)] hover:border-[var(--accent-primary)] hover:text-[var(--accent-primary)] text-[var(--text-secondary)] text-sm font-medium py-2.5 rounded-xl transition-all active:scale-[0.98]",
                                 svg {
                                     class: "w-4 h-4",
                                     view_box: "0 0 24 24",
@@ -230,28 +290,36 @@ pub fn ModelPicker() -> Element {
                                     path { d: "M5 12h14" }
                                     path { d: "M12 5l7 7-7 7" }
                                 }
-                                "Load Model"
+                                if app_state.settings.read().language == "en" { "Load Model" } else { "Charger le modele" }
                             }
                         },
                         ModelState::Loading => rsx! {
                             div {
-                                class: "w-full flex items-center justify-center gap-3 bg-[var(--bg-subtle)] border border-[var(--border-subtle)] py-2.5 rounded-lg",
-                                Spinner { size: 16 }
-                                span { class: "text-xs font-medium text-[var(--text-secondary)]", "Loading into memory..." }
+                                class: "w-full flex flex-col gap-2 bg-white/[0.03] border border-[var(--border-subtle)] p-3 rounded-xl",
+                                div {
+                                    class: "flex items-center gap-2",
+                                    Spinner { size: 14 }
+                                    span { class: "text-xs font-medium text-[var(--text-secondary)]",
+                                        if app_state.settings.read().language == "en" { "Loading into memory..." } else { "Chargement en memoire..." }
+                                    }
+                                }
+                                div { class: "loading-bar" }
                             }
                         },
                         ModelState::Loaded(_) => rsx! {
                             div {
                                 class: "flex items-center gap-2",
                                 div {
-                                    class: "flex-1 flex items-center gap-2 px-3 py-2.5 bg-[var(--bg-success-subtle)] border border-[var(--border-success-subtle)] rounded-lg",
-                                    div { class: "w-1.5 h-1.5 rounded-full bg-[var(--success)] animate-pulse shadow-[0_0_8px_rgba(16,185,129,0.4)]" }
-                                    span { class: "text-xs font-medium text-[var(--text-success)]", "Ready" }
+                                    class: "flex-1 flex items-center gap-2 px-3 py-2 bg-[var(--bg-success-subtle)] border border-[var(--border-success-subtle)] rounded-xl",
+                                    div { class: "status-dot status-dot-ready" }
+                                    span { class: "text-xs font-medium text-[var(--text-success)]",
+                                        if app_state.settings.read().language == "en" { "Ready" } else { "Pret" }
+                                    }
                                 }
                                 button {
                                     onclick: handle_unload,
-                                    class: "px-3 py-2.5 text-sm text-[var(--text-secondary)] border border-[var(--border-subtle)] rounded-lg hover:bg-[var(--bg-error-subtle)] hover:border-[var(--border-error-subtle)] hover:text-[var(--text-error)] transition-colors",
-                                    title: "Unload Model",
+                                    class: "px-3 py-2 text-sm text-[var(--text-secondary)] border border-[var(--border-subtle)] rounded-xl hover:bg-[var(--bg-error-subtle)] hover:border-[var(--border-error-subtle)] hover:text-[var(--text-error)] transition-colors",
+                                    title: if app_state.settings.read().language == "en" { "Unload Model" } else { "Decharger le modele" },
                                     svg {
                                         class: "w-4 h-4",
                                         view_box: "0 0 24 24",
@@ -268,7 +336,7 @@ pub fn ModelPicker() -> Element {
                         },
                         ModelState::Error(ref msg) => rsx! {
                             div {
-                                class: "w-full p-2 bg-[var(--bg-error-subtle)] border border-[var(--border-error-subtle)] rounded-lg text-xs text-[var(--text-error)]",
+                                class: "w-full p-2 bg-[var(--bg-error-subtle)] border border-[var(--border-error-subtle)] rounded-xl text-xs text-[var(--text-error)]",
                                 "{msg}"
                             }
                         }
@@ -276,47 +344,47 @@ pub fn ModelPicker() -> Element {
                 }
             }
 
-            // Download from HuggingFace button
+            // Download from HuggingFace
             div {
-                class: "border-t border-[var(--border-subtle)] pt-3",
-                button {
-                    onclick: move |_| show_download_dialog.set(true),
-                    class: "w-full flex items-center justify-center gap-2 text-[var(--text-tertiary)] hover:text-[var(--accent-primary)] text-xs font-medium py-2 rounded-lg transition-colors",
-                    disabled: *is_downloading.read(),
-                    svg {
-                        class: "w-4 h-4",
-                        view_box: "0 0 24 24",
-                        fill: "none",
-                        stroke: "currentColor",
-                        stroke_width: "2",
-                        stroke_linecap: "round",
-                        stroke_linejoin: "round",
-                        path { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" }
-                        polyline { points: "7 10 12 15 17 10" }
-                        line { x1: "12", y1: "15", x2: "12", y2: "3" }
-                    }
-                    "Download from HuggingFace"
+                class: "divider-premium"
+            }
+            button {
+                onclick: move |_| show_download_dialog.set(true),
+                class: "w-full flex items-center justify-center gap-2 text-[var(--text-tertiary)] hover:text-[var(--accent-primary)] text-xs font-medium py-1.5 rounded-lg transition-colors",
+                disabled: *is_downloading.read(),
+                svg {
+                    class: "w-3.5 h-3.5",
+                    view_box: "0 0 24 24",
+                    fill: "none",
+                    stroke: "currentColor",
+                    stroke_width: "2",
+                    stroke_linecap: "round",
+                    stroke_linejoin: "round",
+                    path { d: "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" }
+                    polyline { points: "7 10 12 15 17 10" }
+                    line { x1: "12", y1: "15", x2: "12", y2: "3" }
                 }
+                if app_state.settings.read().language == "en" { "Download from HuggingFace" } else { "Telecharger depuis HuggingFace" }
             }
 
             // Download Dialog
             if *show_download_dialog.read() {
                 div {
-                    class: "fixed inset-0 bg-black/50 backdrop-blur-sm z-50 flex items-center justify-center p-4",
+                    class: "fixed inset-0 bg-black/60 backdrop-blur-xl z-50 flex items-center justify-center p-4",
                     onclick: move |_| show_download_dialog.set(false),
                     
                     div {
-                        class: "w-full max-w-md bg-[var(--bg-secondary)] rounded-xl border border-[var(--border-subtle)] p-6 shadow-xl",
+                        class: "w-full max-w-md glass-strong rounded-2xl p-6 animate-scale-in",
                         onclick: move |e| e.stop_propagation(),
                         
                         h3 {
                             class: "text-lg font-semibold text-[var(--text-primary)] mb-2",
-                            "Download Model from HuggingFace"
+                            if app_state.settings.read().language == "en" { "Download Model from HuggingFace" } else { "Telecharger un modele HuggingFace" }
                         }
                         
                         p {
                             class: "text-sm text-[var(--text-secondary)] mb-4",
-                            "Enter a HuggingFace repository URL or model ID. Example: TheBloke/Llama-2-7B-GGUF"
+                            if app_state.settings.read().language == "en" { "Enter a HuggingFace repository URL or model ID. Example: TheBloke/Llama-2-7B-GGUF" } else { "Entrez une URL de depot HuggingFace ou un ID de modele. Exemple : TheBloke/Llama-2-7B-GGUF" }
                         }
                         
                         input {
@@ -325,31 +393,30 @@ pub fn ModelPicker() -> Element {
                             oninput: move |e| download_url.set(e.value()),
                             disabled: *is_downloading.read(),
                             placeholder: "username/repo or full URL",
-                            class: "w-full p-3 rounded-lg bg-[var(--bg-input)] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:border-[var(--accent-primary)] focus:ring-1 focus:ring-[var(--accent-primary)] transition-all outline-none mb-4",
+                            class: "w-full p-3 rounded-xl bg-white/[0.03] border border-[var(--border-subtle)] text-[var(--text-primary)] focus:border-[var(--accent-primary)] transition-all outline-none mb-4",
                         }
                         
-                        // Progress indicator
                         if *is_downloading.read() {
                             div {
-                                class: "mb-4 flex items-center justify-center gap-3 p-3 bg-[var(--bg-tertiary)] rounded-lg",
+                                class: "mb-4 flex items-center justify-center gap-3 p-3 bg-white/[0.02] rounded-xl border border-[var(--border-subtle)]",
                                 Spinner { size: 16 }
-                                span { class: "text-sm text-[var(--text-secondary)]", "Downloading..." }
+                                span { class: "text-sm text-[var(--text-secondary)]",
+                                    if app_state.settings.read().language == "en" { "Downloading..." } else { "Telechargement..." }
+                                }
                             }
                         }
                         
-                        // Error message
                         if let Some(error) = download_error.read().as_ref() {
                             div {
-                                class: "p-3 mb-4 bg-[var(--bg-error-subtle)] border border-[var(--border-error-subtle)] rounded-lg text-xs text-[var(--text-error)]",
+                                class: "p-3 mb-4 bg-[var(--bg-error-subtle)] border border-[var(--border-error-subtle)] rounded-xl text-xs text-[var(--text-error)]",
                                 "{error}"
                             }
                         }
                         
-                        // Success message
                         if *download_success.read() {
                             div {
-                                class: "p-3 mb-4 bg-[var(--bg-success-subtle)] border border-[var(--border-success-subtle)] rounded-lg text-xs text-[var(--text-success)]",
-                                "Download complete! Model is now available in the list."
+                                class: "p-3 mb-4 bg-[var(--bg-success-subtle)] border border-[var(--border-success-subtle)] rounded-xl text-xs text-[var(--text-success)]",
+                                if app_state.settings.read().language == "en" { "Download complete! Model is now available in the list." } else { "Telechargement termine ! Le modele est maintenant disponible." }
                             }
                         }
                         
@@ -357,18 +424,18 @@ pub fn ModelPicker() -> Element {
                             class: "flex gap-3",
                             button {
                                 onclick: move |_| show_download_dialog.set(false),
-                                class: "flex-1 px-4 py-2.5 rounded-lg bg-[var(--bg-tertiary)] text-[var(--text-secondary)] font-medium hover:bg-[var(--bg-hover)] hover:text-[var(--text-primary)] transition-colors",
-                                "Cancel"
+                                class: "btn-ghost flex-1",
+                                if app_state.settings.read().language == "en" { "Cancel" } else { "Annuler" }
                             }
                             button {
                                 onclick: handle_download,
                                 disabled: *is_downloading.read(),
-                                class: "flex-1 px-4 py-2.5 rounded-lg bg-[var(--accent-primary)] text-white font-medium hover:bg-[var(--accent-secondary)] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2",
+                                class: "btn-primary flex-1 flex items-center justify-center gap-2",
                                 if *is_downloading.read() {
                                     Spinner { size: 14 }
-                                    "Downloading..."
+                                    if app_state.settings.read().language == "en" { "Downloading..." } else { "Telechargement..." }
                                 } else {
-                                    "Download"
+                                    if app_state.settings.read().language == "en" { "Download" } else { "Telecharger" }
                                 }
                             }
                         }

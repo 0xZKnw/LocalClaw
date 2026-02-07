@@ -1,11 +1,13 @@
 use crate::app::AppState;
-use crate::storage::settings::save_settings;
+use crate::storage::settings::{save_settings, default_system_prompt_for_lang};
 use dioxus::prelude::*;
 
 pub fn AppearanceSettings() -> Element {
     let app_state = use_context::<AppState>();
     let settings = app_state.settings.read().clone();
     let dark_mode = settings.theme == "dark";
+    let current_lang = settings.language.clone();
+    let is_fr = current_lang == "fr";
     let font_size = settings.font_size.to_lowercase();
     let selected_font_size = match font_size.as_str() {
         "small" => "Small",
@@ -14,27 +16,83 @@ pub fn AppearanceSettings() -> Element {
     };
     let mut app_state_theme = app_state.clone();
     let mut app_state_font_size = app_state.clone();
+    let mut app_state_lang = app_state.clone();
 
     rsx! {
         div {
-            class: "space-y-6 max-w-3xl mx-auto animate-fade-in pb-8",
+            class: "space-y-6 max-w-3xl mx-auto animate-fade-in-up pb-8",
 
-            // Card 1: Theme
+            // Language Card
             div {
-                class: "p-6 rounded-2xl bg-white/[0.03] backdrop-blur-md border border-white/[0.08]",
+                class: "p-5 rounded-2xl glass-md",
 
                 h3 {
-                    class: "text-xl font-semibold mb-6 text-[var(--text-primary)]",
-                    "Interface Appearance"
+                    class: "text-base font-semibold mb-5 text-[var(--text-primary)]",
+                    if is_fr { "Langue" } else { "Language" }
                 }
 
-                // Theme Toggle
                 div {
-                    class: "flex items-center justify-between py-2",
+                    div {
+                        class: "text-sm font-medium text-[var(--text-primary)] mb-1",
+                        if is_fr { "Langue de l'interface" } else { "Interface language" }
+                    }
+                    div {
+                        class: "text-xs text-[var(--text-tertiary)] mb-4",
+                        if is_fr { "Change la langue de l'interface et des réponses de l'IA" } else { "Changes the UI language and AI responses" }
+                    }
+
+                    div { class: "grid grid-cols-2 gap-3",
+                        for (code, label, flag) in [("fr", "Français", "FR"), ("en", "English", "EN")] {
+                            button {
+                                onclick: {
+                                    let code = code.to_string();
+                                    move |_| {
+                                        let mut settings = app_state_lang.settings.write();
+                                        settings.language = code.clone();
+                                        settings.system_prompt = default_system_prompt_for_lang(&code);
+                                        if let Err(error) = save_settings(&settings) {
+                                            tracing::error!("Failed to save settings: {}", error);
+                                        }
+                                    }
+                                },
+                                class: format!(
+                                    "py-3 px-4 rounded-xl border transition-all text-center flex items-center justify-center gap-3 {}",
+                                    if current_lang == code {
+                                        "border-[var(--accent-primary)] bg-[var(--accent-primary-10)] text-[var(--accent-primary)]"
+                                    } else {
+                                        "border-[var(--border-subtle)] bg-white/[0.02] text-[var(--text-secondary)] hover:border-[var(--border-medium)] hover:bg-white/[0.04]"
+                                    }
+                                ),
+                                span {
+                                    class: "text-xs font-bold opacity-60",
+                                    "{flag}"
+                                }
+                                span { class: "text-sm font-medium", "{label}" }
+                            }
+                        }
+                    }
+                }
+            }
+
+            // Theme Card — glass
+            div {
+                class: "p-5 rounded-2xl glass-md",
+
+                h3 {
+                    class: "text-base font-semibold mb-5 text-[var(--text-primary)]",
+                    if is_fr { "Theme" } else { "Theme" }
+                }
+
+                div {
+                    class: "flex items-center justify-between",
 
                     div {
-                        div { class: "font-medium text-[var(--text-primary)]", "Dark Mode" }
-                        div { class: "text-sm text-[var(--text-secondary)] opacity-80", "Toggle application color theme" }
+                        div { class: "text-sm font-medium text-[var(--text-primary)]",
+                            if is_fr { "Mode sombre" } else { "Dark Mode" }
+                        }
+                        div { class: "text-xs text-[var(--text-tertiary)] mt-0.5",
+                            if is_fr { "Basculer entre le theme clair et sombre" } else { "Switch between light and dark theme" }
+                        }
                     }
                     button {
                         onclick: move |_| {
@@ -44,32 +102,30 @@ pub fn AppearanceSettings() -> Element {
                                 tracing::error!("Failed to save settings: {}", error);
                             }
                         },
-                        class: "relative inline-flex h-7 w-12 items-center rounded-full transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-[var(--accent-primary)]",
-                        style: format!(
-                            "background-color: {};",
-                            if dark_mode { "var(--accent-primary)" } else { "rgba(255, 255, 255, 0.1)" }
-                        ),
-                        span {
-                            class: "inline-block h-5 w-5 transform rounded-full bg-white transition-transform shadow-sm",
-                            style: format!(
-                                "transform: translateX({});",
-                                if dark_mode { "1.5rem" } else { "0.25rem" }
-                            )
-                        }
+                        class: if dark_mode { "toggle-switch active" } else { "toggle-switch" },
+                        div { class: "toggle-switch-knob" }
                     }
                 }
             }
 
-            // Card 2: Font Size
-             div {
-                class: "p-6 rounded-2xl bg-white/[0.03] backdrop-blur-md border border-white/[0.08]",
+            // Font Size Card — glass with selection cards
+            div {
+                class: "p-5 rounded-2xl glass-md",
 
-                div { class: "space-y-4",
-                    div {
-                        div { class: "font-medium text-[var(--text-primary)]", "Font Size" }
-                        div { class: "text-sm text-[var(--text-secondary)] opacity-80", "Adjust the text size of the chat interface" }
+                h3 {
+                    class: "text-base font-semibold mb-5 text-[var(--text-primary)]",
+                    if is_fr { "Typographie" } else { "Typography" }
+                }
+
+                div {
+                    div { class: "text-sm font-medium text-[var(--text-primary)] mb-1",
+                        if is_fr { "Taille de police" } else { "Font Size" }
                     }
-                    div { class: "grid grid-cols-3 gap-4",
+                    div { class: "text-xs text-[var(--text-tertiary)] mb-4",
+                        if is_fr { "Ajuster la taille du texte dans le chat" } else { "Adjust text size in the chat interface" }
+                    }
+
+                    div { class: "grid grid-cols-3 gap-3",
                         for size in &["Small", "Medium", "Large"] {
                             button {
                                 onclick: move |_| {
@@ -80,20 +136,20 @@ pub fn AppearanceSettings() -> Element {
                                     }
                                 },
                                 class: format!(
-                                    "p-4 rounded-xl border transition-all duration-200 {}",
+                                    "py-3 px-4 rounded-xl border transition-all text-center {}",
                                     if selected_font_size == *size {
-                                        "border-[var(--accent-primary)] bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] shadow-sm"
+                                        "border-[var(--accent-primary)] bg-[var(--accent-primary-10)] text-[var(--accent-primary)]"
                                     } else {
-                                        "border-white/[0.08] bg-white/[0.02] text-[var(--text-secondary)] hover:bg-white/[0.05] hover:border-white/[0.12]"
+                                        "border-[var(--border-subtle)] bg-white/[0.02] text-[var(--text-secondary)] hover:border-[var(--border-medium)] hover:bg-white/[0.04]"
                                     }
                                 ),
-                                div { class: "font-semibold mb-1", "{size}" }
+                                div { class: "text-sm font-medium", "{size}" }
                                 div {
-                                    class: "opacity-60",
+                                    class: "text-[var(--text-tertiary)] mt-1",
                                     style: match *size {
-                                        "Small" => "font-size: 0.875rem;",
-                                        "Medium" => "font-size: 1rem;",
-                                        "Large" => "font-size: 1.25rem;",
+                                        "Small" => "font-size: 0.75rem;",
+                                        "Medium" => "font-size: 0.875rem;",
+                                        "Large" => "font-size: 1rem;",
                                         _ => ""
                                     },
                                     "Aa"

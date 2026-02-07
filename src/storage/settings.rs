@@ -30,6 +30,129 @@ pub struct AppSettings {
     pub theme: String,
     /// Font size: "small", "medium", or "large"
     pub font_size: String,
+    /// Exa MCP server URL
+    #[serde(default)]
+    pub exa_mcp_url: String,
+    /// Last loaded model path (for auto-loading on startup)
+    #[serde(default)]
+    pub last_model_path: Option<String>,
+    /// Auto-load last model on startup
+    #[serde(default = "default_auto_load")]
+    pub auto_load_model: bool,
+    /// UI and agent language: "fr" or "en"
+    #[serde(default = "default_language")]
+    pub language: String,
+    /// Auto-approve ALL tool calls without asking (dangerous but convenient)
+    #[serde(default)]
+    pub auto_approve_all_tools: bool,
+    /// List of tool names that are auto-approved (allowlist)
+    #[serde(default)]
+    pub tool_allowlist: Vec<String>,
+}
+
+fn default_auto_load() -> bool {
+    true
+}
+
+fn default_language() -> String {
+    "fr".to_string()
+}
+
+/// Default system prompt from code. Used on every app load so the prompt always matches the code.
+pub fn default_system_prompt() -> String {
+    default_system_prompt_for_lang("fr")
+}
+
+/// Build system prompt for a specific language
+pub fn default_system_prompt_for_lang(lang: &str) -> String {
+    let os_name = match std::env::consts::OS {
+        "windows" => "Windows",
+        "macos" => "macOS",
+        "linux" => "Linux",
+        other => other,
+    };
+    let home = std::env::var("USERPROFILE")
+        .or_else(|_| std::env::var("HOME"))
+        .unwrap_or_else(|_| "unknown".to_string());
+    let sep = if std::env::consts::OS == "windows" { "\\" } else { "/" };
+    let cmd_info = if std::env::consts::OS == "windows" {
+        "\n- This is Windows. Use PowerShell commands: dir, Get-ChildItem, Get-Content, etc.\n- Do NOT use Unix commands (ls, cat, grep). They won't work."
+    } else {
+        "\n- Use standard Unix commands: ls, cat, grep, find, etc."
+    };
+    let cmd_example = if std::env::consts::OS == "windows" {
+        "dir"
+    } else {
+        "ls -la"
+    };
+
+    let response_lang_instruction = if lang == "en" {
+        "Always respond in English."
+    } else {
+        "Always respond in French (toujours repondre en francais)."
+    };
+
+    format!(
+        r#"You are LocaLM, a helpful AI assistant running locally on the user's machine.
+{response_lang}
+
+## System Environment
+
+- OS: {os_name} ({arch})
+- Home directory: {home}
+- Desktop: {home}{sep}Desktop
+- Documents: {home}{sep}Documents
+- Downloads: {home}{sep}Downloads
+- Path separator: {sep}
+
+You know the user's home directory: {home}. Use it directly, never ask.
+
+## Tools
+
+You have these tools. Use them IMMEDIATELY when relevant — do NOT ask the user for information you can look up yourself.
+
+### web_search
+Search the web for current information.
+```json
+{{"tool": "web_search", "params": {{"query": "search terms", "num_results": 5}}}}
+```
+
+### file_read
+Read a file's content. You know the user's paths, use them.
+```json
+{{"tool": "file_read", "params": {{"path": "{home}{sep}Desktop{sep}example.txt"}}}}
+```
+
+### file_list
+List a directory's contents.
+```json
+{{"tool": "file_list", "params": {{"path": "{home}{sep}Desktop"}}}}
+```
+
+### command
+Execute a shell command.{cmd_info}
+```json
+{{"tool": "command", "params": {{"command": "{cmd_example}", "timeout_secs": 30}}}}
+```
+
+## Rules
+
+1. **ACT, don't ask.** If the user says "list my desktop", use file_list with their Desktop path immediately. Do NOT ask them for the path.
+2. **Use tools proactively.** If you need info, use a tool. Don't say "I can't access your files" — you CAN.
+3. **Derive paths.** Desktop = Home{sep}Desktop, Documents = Home{sep}Documents, etc.
+4. **One tool per message.** Call one tool, wait for the result, then respond or call another.
+5. **Be concise.** Give direct, useful answers. No unnecessary preamble.
+6. **Handle errors.** If a tool fails, try an alternative approach.
+7. **Think internally.** Use <think>...</think> for your reasoning. The user sees it as a collapsible block.
+8. **{response_lang}**"#,
+        response_lang = response_lang_instruction,
+        os_name = os_name,
+        arch = std::env::consts::ARCH,
+        home = home,
+        sep = sep,
+        cmd_info = cmd_info,
+        cmd_example = cmd_example,
+    )
 }
 
 impl Default for AppSettings {
@@ -38,89 +161,9 @@ impl Default for AppSettings {
             temperature: 0.7,
             top_p: 0.9,
             top_k: 40,
-            max_tokens: 65536,    // 64k max output tokens
-            context_size: 131072, // 128k context window
-            system_prompt: r#"You are LocaLM, an AI assistant with access to tools and system capabilities.
-
-## Your Capabilities
-
-You have access to the following tools:
-
-### 1. Web Search (web_search)
-Search the internet for real-time information.
-- Use this when you need current information, facts, or data
-- Parameter: {"query": "your search query", "num_results": 5}
-
-### 2. File System Access
-- **file_read**: Read text files on the system
-  - Use this to read code, documents, logs, or any text file
-  - Parameter: {"path": "/absolute/path/to/file"}
-  
-- **file_list**: List directory contents
-  - Use this to explore folders and see what files are available
-  - Parameter: {"path": "/absolute/path/to/directory"}
-
-### 3. Command Execution (command)
-Execute safe shell commands.
-- Allowed commands: ls, cat, echo, pwd, whoami, date, wc, head, tail, find, grep
-- Use for: checking system info, reading logs, exploring directories
-- Parameter: {"command": "ls -la", "timeout_secs": 30}
-
-## When to Use Tools
-
-**Use web_search when:**
-- The user asks about current events, recent news, or time-sensitive information
-- You need to verify facts or find specific data
-- The query requires information beyond your training data
-
-**Use file_read/file_list when:**
-- The user asks about files on their system
-- You need to analyze code, logs, or documents
-- The user wants help with local files
-
-**Use command when:**
-- You need system information (date, current directory, etc.)
-- The user asks to list files or search within files
-- You need to check system status
-
-## Tool Usage Format
-
-When you need to use a tool, respond with a JSON object:
-```json
-{
-  "tool": "tool_name",
-  "params": {
-    "param1": "value1",
-    "param2": "value2"
-  }
-}
-```
-
-After the tool executes, you will receive the result and can provide your final response based on that information.
-
-## Guidelines
-
-1. **Always use tools** when the user's request requires information you don't have
-2. **Ask for permission** before accessing sensitive files or executing commands outside the safe list
-3. **Be concise** but thorough in your responses
-4. **Explain your reasoning** when using tools - tell the user what you're doing and why
-5. **Handle errors gracefully** - if a tool fails, explain what went wrong and suggest alternatives
-
-## Examples
-
-User: "What's the weather like in Paris?"
-→ Use web_search: {"query": "current weather Paris France"}
-
-User: "Can you read my config file?"
-→ Ask: "What's the path to your config file?"
-
-User: "Show me the files in my home directory"
-→ Use command: {"command": "ls -la ~"}
-
-User: "Help me debug this error"
-→ Ask for the error log file path, then use file_read
-
-Remember: You have a 128k context window and can generate up to 64k tokens, so you can handle long conversations and detailed responses."#.to_string(),
+            max_tokens: 4096,     // 4K output - OK with 16K context
+            context_size: 16384,  // 16K context - user confirmed 36 tok/s in LM Studio with 16K on 8GB VRAM
+            system_prompt: default_system_prompt(),
             gpu_layers: 99, // Offload all layers to GPU by default
             models_directory: get_data_dir()
                 .ok()
@@ -128,6 +171,12 @@ Remember: You have a 128k context window and can generate up to 64k tokens, so y
                 .unwrap_or_else(|| PathBuf::from("./models")),
             theme: "dark".to_string(),
             font_size: "medium".to_string(),
+            exa_mcp_url: "https://mcp.exa.ai/mcp".to_string(),
+            last_model_path: None,
+            auto_load_model: true,
+            language: "fr".to_string(),
+            auto_approve_all_tools: false,
+            tool_allowlist: Vec::new(),
         }
     }
 }
@@ -135,42 +184,87 @@ Remember: You have a 128k context window and can generate up to 64k tokens, so y
 impl AppSettings {
     /// Validate settings values
     ///
-    /// Ensures all parameters are within acceptable ranges
+    /// Ensures all parameters are within acceptable ranges.
+    /// Also caps context size based on available VRAM to prevent KV cache overflow.
     pub fn validate(&mut self) {
-        // Clamp temperature between 0.0 and 2.0
         self.temperature = self.temperature.clamp(0.0, 2.0);
-
-        // Clamp top_p between 0.0 and 1.0
         self.top_p = self.top_p.clamp(0.0, 1.0);
-
-        // Ensure reasonable values for other parameters
+        
         if self.top_k == 0 {
             self.top_k = 40;
         }
 
-        // Clamp max_tokens between 1 and 65536 (64k)
         self.max_tokens = self.max_tokens.clamp(1, 65536);
 
-        // Valid context sizes: 2048, 4096, 8192, 16384, 32768, 65536, 131072
+        // Valid context sizes
         let valid_context_sizes = [2048, 4096, 8192, 16384, 32768, 65536, 131072];
         if !valid_context_sizes.contains(&self.context_size) {
-            // Find closest valid size
             self.context_size = *valid_context_sizes
                 .iter()
                 .min_by_key(|&&size| (size as i64 - self.context_size as i64).abs())
-                .unwrap_or(&131072);
+                .unwrap_or(&4096);
         }
 
-        // Validate theme
+        // === VRAM-aware context cap ===
+        // Prevent KV cache from overflowing dedicated VRAM.
+        // 7B Q4_K_M ~4.1 GB; 16K context KV cache ~2 GB → fits in 8 GB.
+        let max_safe_context = get_vram_safe_context_size();
+        if self.context_size > max_safe_context {
+            tracing::warn!(
+                "Context size {} too large for available VRAM, capping to {}",
+                self.context_size, max_safe_context
+            );
+            self.context_size = max_safe_context;
+        }
+        
+        // Cap max_tokens to context_size (can't generate more than context allows)
+        if self.max_tokens > self.context_size {
+            self.max_tokens = self.context_size / 2;
+        }
+
         if self.theme != "dark" && self.theme != "light" {
             self.theme = "dark".to_string();
         }
 
-        // Validate font size
         if !["small", "medium", "large"].contains(&self.font_size.as_str()) {
             self.font_size = "medium".to_string();
         }
+
+        if self.exa_mcp_url.trim().is_empty() {
+            self.exa_mcp_url = "https://mcp.exa.ai/mcp".to_string();
+        }
+
+        if self.language != "fr" && self.language != "en" {
+            self.language = "fr".to_string();
+        }
     }
+}
+
+/// Estimate the maximum safe context size based on available VRAM.
+/// This prevents the KV cache from spilling into shared GPU memory (RAM), which is slow.
+/// Tuned so 8 GB VRAM allows 16K context (7B model ~4.1 GB + 16K KV ~2 GB).
+fn get_vram_safe_context_size() -> u32 {
+    let vram_gb = crate::system::gpu::get_total_vram_gb().unwrap_or(0.0);
+
+    if vram_gb <= 0.0 {
+        return 16384; // default when VRAM unknown
+    }
+
+    // Heuristic: 50% VRAM for model, 50% for KV cache. 7B 16K ≈ 2 GB KV.
+    // Per 1K context for 7B: ~128 MB. Use 128 so 8 GB -> 4 GB for KV -> 32K cap.
+    let vram_for_kv = vram_gb * 0.5;
+    let max_ctx_k = (vram_for_kv * 1024.0 / 128.0) as u32;
+    let max_ctx = max_ctx_k * 1024;
+
+    let sizes = [131072, 65536, 32768, 16384, 8192, 4096, 2048];
+    for &s in &sizes {
+        if s <= max_ctx {
+            tracing::info!("VRAM: {:.1} GB -> max safe context: {}K", vram_gb, s / 1024);
+            return s;
+        }
+    }
+
+    2048
 }
 
 /// Get the settings file path
@@ -202,6 +296,9 @@ fn load_settings_internal() -> Result<AppSettings, StorageError> {
 
     let json = fs::read_to_string(&path)?;
     let mut settings: AppSettings = serde_json::from_str(&json)?;
+
+    // Always use system prompt from code so app reflects current version on reload
+    settings.system_prompt = default_system_prompt_for_lang(&settings.language);
 
     // Validate loaded settings
     settings.validate();

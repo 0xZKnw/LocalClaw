@@ -1,3 +1,6 @@
+//! Message display components with Markdown rendering
+
+use crate::app::AppState;
 use dioxus::prelude::*;
 
 #[derive(Clone, PartialEq, Debug)]
@@ -11,7 +14,6 @@ pub enum MessageRole {
 pub struct Message {
     pub role: MessageRole,
     pub content: String,
-    // We could add timestamp, id, etc. later
 }
 
 // Convert storage Message to UI Message
@@ -46,16 +48,40 @@ impl From<Message> for crate::types::message::Message {
 #[derive(Clone, PartialEq, Debug)]
 enum ContentPart {
     Text(String),
-    Thinking(String),
+    Thinking(String),           // Completed <think>...</think> block
+    ThinkingStreaming(String),   // Open <think> block still being generated
 }
 
-/// Parse <think>...</think> blocks from message content
+/// Parse thinking blocks from message content.
+/// Supports both <think>...</think> and <thinking>...</thinking> tags.
+/// Incomplete tags are rendered as live streaming blocks.
+/// Also strips <request>...</request> tags (rendered as normal text).
 fn parse_thinking_blocks(content: &str) -> Vec<ContentPart> {
-    let mut parts = Vec::new();
-    let mut remaining = content;
+    // First: strip <request>...</request> tags, keeping inner content as normal text
+    let cleaned = strip_xml_tags(content, "request");
 
-    while let Some(start) = remaining.find("<think>") {
-        // Add text before <think>
+    let mut parts = Vec::new();
+    let mut remaining = cleaned.as_str();
+
+    loop {
+        // Find the earliest opening tag: <think> or <thinking>
+        let think_pos = remaining.find("<think>");
+        let thinking_pos = remaining.find("<thinking>");
+
+        let (start, open_tag, close_tag) = match (think_pos, thinking_pos) {
+            (Some(a), Some(b)) => {
+                if a <= b {
+                    (a, "<think>", "</think>")
+                } else {
+                    (b, "<thinking>", "</thinking>")
+                }
+            }
+            (Some(a), None) => (a, "<think>", "</think>"),
+            (None, Some(b)) => (b, "<thinking>", "</thinking>"),
+            (None, None) => break,
+        };
+
+        // Text before the tag
         if start > 0 {
             let text = remaining[..start].to_string();
             if !text.trim().is_empty() {
@@ -63,28 +89,34 @@ fn parse_thinking_blocks(content: &str) -> Vec<ContentPart> {
             }
         }
 
-        // Find closing tag
-        if let Some(end_offset) = remaining[start..].find("</think>") {
-            let think_start = start + 7; // length of "<think>"
+        let open_len = open_tag.len();
+        let close_len = close_tag.len();
+
+        if let Some(end_offset) = remaining[start..].find(close_tag) {
+            // Closed thinking block
+            let think_start = start + open_len;
             let think_end = start + end_offset;
             let think_content = remaining[think_start..think_end].to_string();
             if !think_content.trim().is_empty() {
                 parts.push(ContentPart::Thinking(think_content));
             }
-            remaining = &remaining[think_end + 8..]; // length of "</think>"
+            remaining = &remaining[think_end + close_len..];
         } else {
-            // No closing tag, treat rest as text
-            parts.push(ContentPart::Text(remaining[start..].to_string()));
+            // STREAMING: open tag without closing -> live thinking block
+            let think_start = start + open_len;
+            if think_start <= remaining.len() {
+                let think_content = remaining[think_start..].to_string();
+                parts.push(ContentPart::ThinkingStreaming(think_content));
+            }
             remaining = "";
+            break;
         }
     }
 
-    // Add remaining text
     if !remaining.is_empty() {
         parts.push(ContentPart::Text(remaining.to_string()));
     }
 
-    // If no parts found, return the whole content as text
     if parts.is_empty() {
         parts.push(ContentPart::Text(content.to_string()));
     }
@@ -92,9 +124,23 @@ fn parse_thinking_blocks(content: &str) -> Vec<ContentPart> {
     parts
 }
 
-/// Collapsible thinking block component
+/// Strip XML-like tags, keeping the inner content as plain text.
+/// e.g. strip_xml_tags("Hello <request>world</request>!", "request") -> "Hello world!"
+fn strip_xml_tags(content: &str, tag: &str) -> String {
+    let open = format!("<{}>", tag);
+    let close = format!("</{}>", tag);
+    let mut result = content.to_string();
+    // Remove all occurrences of opening and closing tags
+    result = result.replace(&open, "");
+    result = result.replace(&close, "");
+    result
+}
+
+/// Collapsible thinking block component - premium style with left accent border
 #[component]
 fn ThinkingBlock(content: String) -> Element {
+    let app_state = use_context::<AppState>();
+    let is_en = app_state.settings.read().language == "en";
     let mut is_expanded = use_signal(|| false);
 
     let chevron_class = if is_expanded() {
@@ -110,35 +156,871 @@ fn ThinkingBlock(content: String) -> Element {
     };
 
     rsx! {
-        div { class: "thinking-block",
-            // Clickable header
+        div { class: "thinking-block my-3",
             div {
                 class: "thinking-header",
                 onclick: move |_| is_expanded.set(!is_expanded()),
 
-                // Chevron icon (right-pointing arrow)
                 svg {
                     class: "{chevron_class}",
-                    width: "16",
-                    height: "16",
+                    width: "12",
+                    height: "12",
                     view_box: "0 0 24 24",
                     fill: "none",
                     stroke: "currentColor",
-                    stroke_width: "2",
+                    stroke_width: "2.5",
                     stroke_linecap: "round",
                     stroke_linejoin: "round",
                     polyline { points: "9 18 15 12 9 6" }
                 }
 
-                span { "Thinking..." }
+                span { if is_en { "Thinking" } else { "Reflexion" } }
             }
 
-            // Collapsible content
             div {
                 class: "{content_class}",
                 div {
-                    class: "whitespace-pre-wrap break-words",
-                    "{content}"
+                    class: "text-sm text-[var(--text-secondary)] leading-relaxed px-4 pb-3",
+                    MarkdownContent { content: content }
+                }
+            }
+        }
+    }
+}
+
+/// Streaming thinking block - elegant, always expanded with soft animation
+#[component]
+fn ThinkingBlockStreaming(content: String) -> Element {
+    let display_content = if content.trim().is_empty() {
+        "...".to_string()
+    } else {
+        content.clone()
+    };
+    
+    rsx! {
+        div { class: "thinking-stream my-3",
+            // Header with animated dots
+            div {
+                class: "thinking-header",
+
+                div { class: "flex items-center gap-1",
+                    div { class: "w-1.5 h-1.5 rounded-full bg-[var(--accent-primary)] animate-pulse" }
+                    div { class: "w-1.5 h-1.5 rounded-full bg-[var(--accent-primary)] animate-pulse delay-150" }
+                    div { class: "w-1.5 h-1.5 rounded-full bg-[var(--accent-primary)] animate-pulse delay-300" }
+                }
+
+                span { "Reflexion en cours..." }
+            }
+
+            // Content
+            div {
+                class: "px-4 pb-3 max-h-48 overflow-y-auto scrollbar-thin",
+                p {
+                    class: "text-sm text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap",
+                    "{display_content}"
+                }
+            }
+        }
+    }
+}
+
+/// Markdown content renderer
+#[component]
+fn MarkdownContent(content: String) -> Element {
+    let blocks = parse_markdown_blocks(&content);
+
+    rsx! {
+        div { class: "markdown-content space-y-3",
+            for block in blocks {
+                {render_block(block)}
+            }
+        }
+    }
+}
+
+#[derive(Clone, Debug)]
+enum MarkdownBlock {
+    Paragraph(String),
+    Heading(u8, String),
+    CodeBlock(String, String), // (language, code)
+    MathBlock(String),          // LaTeX math block
+    UnorderedList(Vec<String>),
+    OrderedList(Vec<String>),
+    HorizontalRule,
+    Blockquote(String),
+    Table(Vec<Vec<String>>, Vec<String>), // (rows, headers)
+}
+
+/// Parse a table row into cells
+fn parse_table_row(line: &str) -> Vec<String> {
+    line.trim()
+        .trim_matches('|')
+        .split('|')
+        .map(|cell| cell.trim().to_string())
+        .collect()
+}
+
+/// Check if a line is a table separator (|---|---|)
+fn is_table_separator(line: &str) -> bool {
+    let trimmed = line.trim().trim_matches('|');
+    trimmed.split('|').all(|cell| {
+        let c = cell.trim();
+        c.chars().all(|ch| ch == '-' || ch == ':' || ch == ' ') && c.contains('-')
+    })
+}
+
+fn parse_markdown_blocks(content: &str) -> Vec<MarkdownBlock> {
+    let mut blocks = Vec::new();
+    let lines: Vec<&str> = content.lines().collect();
+    let mut i = 0;
+
+    while i < lines.len() {
+        let line = lines[i];
+        let trimmed = line.trim();
+
+        // Empty line
+        if trimmed.is_empty() {
+            i += 1;
+            continue;
+        }
+
+        // Math block $$...$$
+        if trimmed.starts_with("$$") {
+            let first_line_content = trimmed.trim_start_matches('$').trim();
+            let mut math_lines = Vec::new();
+            
+            if first_line_content.ends_with("$$") {
+                // Single line math block
+                let math = first_line_content.trim_end_matches('$').trim();
+                blocks.push(MarkdownBlock::MathBlock(math.to_string()));
+                i += 1;
+                continue;
+            }
+            
+            if !first_line_content.is_empty() {
+                math_lines.push(first_line_content.to_string());
+            }
+            i += 1;
+            while i < lines.len() {
+                let l = lines[i];
+                if l.trim().contains("$$") {
+                    let before_end = l.trim().trim_end_matches('$').trim();
+                    if !before_end.is_empty() {
+                        math_lines.push(before_end.to_string());
+                    }
+                    i += 1;
+                    break;
+                }
+                math_lines.push(l.to_string());
+                i += 1;
+            }
+            blocks.push(MarkdownBlock::MathBlock(math_lines.join("\n")));
+            continue;
+        }
+
+        // Code block ```
+        if trimmed.starts_with("```") {
+            let lang = trimmed.trim_start_matches('`').to_string();
+            let mut code_lines = Vec::new();
+            i += 1;
+            while i < lines.len() && !lines[i].trim().starts_with("```") {
+                code_lines.push(lines[i]);
+                i += 1;
+            }
+            blocks.push(MarkdownBlock::CodeBlock(lang, code_lines.join("\n")));
+            i += 1;
+            continue;
+        }
+
+        // Horizontal rule
+        if trimmed == "---" || trimmed == "***" || trimmed == "___" {
+            blocks.push(MarkdownBlock::HorizontalRule);
+            i += 1;
+            continue;
+        }
+
+        // Heading
+        if trimmed.starts_with('#') {
+            let level = trimmed.chars().take_while(|&c| c == '#').count();
+            if level <= 6 {
+                let text = trimmed.trim_start_matches('#').trim().to_string();
+                blocks.push(MarkdownBlock::Heading(level as u8, text));
+                i += 1;
+                continue;
+            }
+        }
+
+        // Blockquote
+        if trimmed.starts_with('>') {
+            let mut quote_lines = Vec::new();
+            while i < lines.len() && lines[i].trim().starts_with('>') {
+                quote_lines.push(lines[i].trim().trim_start_matches('>').trim());
+                i += 1;
+            }
+            blocks.push(MarkdownBlock::Blockquote(quote_lines.join("\n")));
+            continue;
+        }
+
+        // Table (lines starting with |)
+        if trimmed.starts_with('|') && trimmed.ends_with('|') {
+            let mut table_lines: Vec<&str> = Vec::new();
+            while i < lines.len() {
+                let l = lines[i].trim();
+                if l.starts_with('|') && l.ends_with('|') {
+                    table_lines.push(l);
+                    i += 1;
+                } else {
+                    break;
+                }
+            }
+            
+            if table_lines.len() >= 2 {
+                // Parse header row
+                let headers: Vec<String> = parse_table_row(table_lines[0]);
+                
+                // Skip separator row (|---|---|)
+                let data_start = if table_lines.len() > 1 && is_table_separator(table_lines[1]) {
+                    2
+                } else {
+                    1
+                };
+                
+                // Parse data rows
+                let rows: Vec<Vec<String>> = table_lines[data_start..]
+                    .iter()
+                    .map(|line| parse_table_row(line))
+                    .collect();
+                
+                blocks.push(MarkdownBlock::Table(rows, headers));
+            }
+            continue;
+        }
+
+        // Unordered list
+        if trimmed.starts_with("- ") || trimmed.starts_with("* ") || trimmed.starts_with("• ") {
+            let mut items = Vec::new();
+            while i < lines.len() {
+                let l = lines[i].trim();
+                if l.starts_with("- ") || l.starts_with("* ") || l.starts_with("• ") {
+                    items.push(l[2..].to_string());
+                    i += 1;
+                } else if l.is_empty() || l.starts_with('#') || l.starts_with("```") {
+                    break;
+                } else {
+                    // Continuation of previous item
+                    if let Some(last) = items.last_mut() {
+                        last.push(' ');
+                        last.push_str(l);
+                    }
+                    i += 1;
+                }
+            }
+            blocks.push(MarkdownBlock::UnorderedList(items));
+            continue;
+        }
+
+        // Ordered list
+        if trimmed.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+            && trimmed.contains(". ")
+        {
+            let mut items = Vec::new();
+            while i < lines.len() {
+                let l = lines[i].trim();
+                if let Some(pos) = l.find(". ") {
+                    if l[..pos].chars().all(|c| c.is_ascii_digit()) {
+                        items.push(l[pos + 2..].to_string());
+                        i += 1;
+                        continue;
+                    }
+                }
+                if l.is_empty() || l.starts_with('#') || l.starts_with("```") {
+                    break;
+                }
+                // Continuation
+                if let Some(last) = items.last_mut() {
+                    last.push(' ');
+                    last.push_str(l);
+                }
+                i += 1;
+            }
+            if !items.is_empty() {
+                blocks.push(MarkdownBlock::OrderedList(items));
+                continue;
+            }
+        }
+
+        // Regular paragraph - collect until empty line or special block
+        let mut para_lines = Vec::new();
+        while i < lines.len() {
+            let l = lines[i];
+            let t = l.trim();
+            if t.is_empty()
+                || t.starts_with('#')
+                || t.starts_with("```")
+                || t.starts_with("---")
+                || t.starts_with("- ")
+                || t.starts_with("* ")
+                || t.starts_with("> ")
+            {
+                break;
+            }
+            para_lines.push(l);
+            i += 1;
+        }
+        if !para_lines.is_empty() {
+            blocks.push(MarkdownBlock::Paragraph(para_lines.join("\n")));
+        }
+    }
+
+    blocks
+}
+
+fn render_block(block: MarkdownBlock) -> Element {
+    match block {
+        MarkdownBlock::Paragraph(text) => rsx! {
+            p { class: "text-[var(--text-primary)] leading-[1.75]",
+                {render_inline(&text)}
+            }
+        },
+        MarkdownBlock::Heading(level, text) => {
+            let class = match level {
+                1 => "text-2xl font-bold text-[var(--text-primary)] mt-6 mb-3",
+                2 => "text-xl font-semibold text-[var(--text-primary)] mt-5 mb-2",
+                3 => "text-lg font-semibold text-[var(--text-primary)] mt-4 mb-2",
+                4 => "text-base font-semibold text-[var(--text-primary)] mt-3 mb-1",
+                _ => "text-sm font-semibold text-[var(--text-primary)] mt-2 mb-1",
+            };
+            rsx! {
+                div { class: "{class}",
+                    {render_inline(&text)}
+                }
+            }
+        }
+        MarkdownBlock::CodeBlock(lang, code) => rsx! {
+            div { class: "my-3 rounded-xl overflow-hidden border border-[var(--border-subtle)]",
+                style: "background: #121110;",
+                if !lang.is_empty() {
+                    div { class: "code-header",
+                        span { "{lang}" }
+                    }
+                }
+                pre { class: "p-4 overflow-x-auto",
+                    code { class: "text-sm font-mono leading-relaxed",
+                        style: "color: #E8E2DB;",
+                        "{code}"
+                    }
+                }
+            }
+        },
+        MarkdownBlock::UnorderedList(items) => rsx! {
+            ul { class: "space-y-1.5 pl-1",
+                for item in items {
+                    li { class: "flex items-start gap-2 text-[var(--text-primary)]",
+                        span { class: "text-[var(--accent-primary)] mt-2 text-xs", "•" }
+                        span { class: "leading-[1.75] flex-1",
+                            {render_inline(&item)}
+                        }
+                    }
+                }
+            }
+        },
+        MarkdownBlock::OrderedList(items) => rsx! {
+            ol { class: "space-y-1.5 pl-1",
+                for (idx, item) in items.iter().enumerate() {
+                    li { class: "flex items-start gap-2 text-[var(--text-primary)]",
+                        span { class: "text-[var(--accent-primary)] font-medium text-sm min-w-[1.25rem]", "{idx + 1}." }
+                        span { class: "leading-[1.75] flex-1",
+                            {render_inline(item)}
+                        }
+                    }
+                }
+            }
+        },
+        MarkdownBlock::MathBlock(math) => rsx! {
+            div { class: "my-4 p-4 rounded-xl bg-[var(--bg-tertiary)]/50 border border-[var(--border-subtle)] overflow-x-auto",
+                pre { class: "font-mono text-sm text-[var(--accent-primary)] text-center whitespace-pre-wrap",
+                    "{math}"
+                }
+            }
+        },
+        MarkdownBlock::HorizontalRule => rsx! {
+            hr { class: "border-none h-px bg-[var(--border-subtle)] my-6" }
+        },
+        MarkdownBlock::Blockquote(text) => rsx! {
+            blockquote { class: "border-l-3 border-[var(--accent-primary)] pl-4 py-2 my-3 bg-[var(--bg-tertiary)]/30 rounded-r-lg",
+                p { class: "text-[var(--text-secondary)] italic leading-relaxed",
+                    {render_inline(&text)}
+                }
+            }
+        },
+        MarkdownBlock::Table(rows, headers) => rsx! {
+            div { class: "my-4 overflow-x-auto rounded-xl border border-[var(--border-subtle)]",
+                table { class: "w-full text-sm",
+                    thead { class: "bg-[var(--bg-tertiary)]",
+                        tr {
+                            for header in headers.iter() {
+                                th { 
+                                    class: "px-4 py-3 text-left font-semibold text-[var(--text-primary)] border-b border-[var(--border-subtle)]",
+                                    {render_inline(header)}
+                                }
+                            }
+                        }
+                    }
+                    tbody {
+                        for (row_idx, row) in rows.iter().enumerate() {
+                            tr { 
+                                class: if row_idx % 2 == 0 { "bg-[var(--bg-secondary)]" } else { "bg-[var(--bg-primary)]" },
+                                for cell in row.iter() {
+                                    td { 
+                                        class: "px-4 py-2.5 text-[var(--text-secondary)] border-b border-[var(--border-subtle)]/50",
+                                        {render_inline(cell)}
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+    }
+}
+
+/// Render inline markdown (bold, italic, code, links, etc.)
+fn render_inline(text: &str) -> Element {
+    let segments = parse_inline_markdown(text);
+
+    rsx! {
+        {segments.into_iter().map(|seg| render_segment(seg))}
+    }
+}
+
+#[derive(Clone, Debug)]
+enum InlineSegment {
+    Text(String),
+    Bold(String),
+    Italic(String),
+    BoldItalic(String),
+    Code(String),
+    Link(String, String), // (text, url)
+    InlineMath(String),
+}
+
+fn parse_inline_markdown(text: &str) -> Vec<InlineSegment> {
+    let mut segments = Vec::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    let mut current_text = String::new();
+
+    while i < chars.len() {
+        // Inline code `...`
+        if chars[i] == '`' && !matches!(chars.get(i + 1), Some('`')) {
+            if let Some(close_offset) = chars[i + 1..].iter().position(|&c| c == '`') {
+                if !current_text.is_empty() {
+                    segments.push(InlineSegment::Text(current_text.clone()));
+                    current_text.clear();
+                }
+                let start = i + 1;
+                let end = i + 1 + close_offset;
+                let code: String = chars[start..end].iter().collect();
+                segments.push(InlineSegment::Code(code));
+                i = end + 1;
+                continue;
+            } else {
+                // Unclosed backtick, treat as normal text
+                current_text.push('`');
+                i += 1;
+                continue;
+            }
+        }
+
+        // Inline math $...$
+        if chars[i] == '$' && !matches!(chars.get(i + 1), Some('$')) {
+            if let Some(close_offset) = chars[i + 1..].iter().position(|&c| c == '$') {
+                if !current_text.is_empty() {
+                    segments.push(InlineSegment::Text(current_text.clone()));
+                    current_text.clear();
+                }
+                let start = i + 1;
+                let end = i + 1 + close_offset;
+                let math: String = chars[start..end].iter().collect();
+                segments.push(InlineSegment::InlineMath(math));
+                i = end + 1;
+                continue;
+            } else {
+                // Unclosed dollar, treat as normal text
+                current_text.push('$');
+                i += 1;
+                continue;
+            }
+        }
+
+        // Bold+Italic ***...***
+        if i + 2 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' && chars[i + 2] == '*' {
+            if !current_text.is_empty() {
+                segments.push(InlineSegment::Text(current_text.clone()));
+                current_text.clear();
+            }
+            let start = i + 3;
+            i += 3;
+            while i + 2 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '*' && chars[i + 2] == '*') {
+                i += 1;
+            }
+            let content: String = chars[start..i].iter().collect();
+            segments.push(InlineSegment::BoldItalic(content));
+            i += 3;
+            continue;
+        }
+
+        // Bold **...**
+        if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] == '*' {
+            if !current_text.is_empty() {
+                segments.push(InlineSegment::Text(current_text.clone()));
+                current_text.clear();
+            }
+            let start = i + 2;
+            i += 2;
+            while i + 1 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '*') {
+                i += 1;
+            }
+            let content: String = chars[start..i].iter().collect();
+            segments.push(InlineSegment::Bold(content));
+            i += 2;
+            continue;
+        }
+
+        // Italic *...*
+        if i + 1 < chars.len() && chars[i] == '*' && chars[i + 1] != '*' && chars[i + 1] != ' ' {
+            if !current_text.is_empty() {
+                segments.push(InlineSegment::Text(current_text.clone()));
+                current_text.clear();
+            }
+            let start = i + 1;
+            i += 1;
+            while i < chars.len() && chars[i] != '*' {
+                i += 1;
+            }
+            let content: String = chars[start..i].iter().collect();
+            if !content.is_empty() && !content.starts_with(' ') && !content.ends_with(' ') {
+                segments.push(InlineSegment::Italic(content));
+                i += 1;
+                continue;
+            } else {
+                // Not valid italic, treat as text
+                current_text.push('*');
+                current_text.push_str(&content);
+                if i < chars.len() {
+                    current_text.push('*');
+                    i += 1;
+                }
+                continue;
+            }
+        }
+
+        // Link [text](url)
+        if chars[i] == '[' {
+            let bracket_start = i;
+            i += 1;
+            let text_start = i;
+            while i < chars.len() && chars[i] != ']' {
+                i += 1;
+            }
+            if i < chars.len() && i + 1 < chars.len() && chars[i + 1] == '(' {
+                let link_text: String = chars[text_start..i].iter().collect();
+                i += 2; // skip ](
+                let url_start = i;
+                while i < chars.len() && chars[i] != ')' {
+                    i += 1;
+                }
+                if i < chars.len() {
+                    let url: String = chars[url_start..i].iter().collect();
+                    if !current_text.is_empty() {
+                        segments.push(InlineSegment::Text(current_text.clone()));
+                        current_text.clear();
+                    }
+                    segments.push(InlineSegment::Link(link_text, url));
+                    i += 1;
+                    continue;
+                }
+            }
+            // Not a valid link, backtrack
+            i = bracket_start;
+        }
+
+        current_text.push(chars[i]);
+        i += 1;
+    }
+
+    if !current_text.is_empty() {
+        segments.push(InlineSegment::Text(current_text));
+    }
+
+    segments
+}
+
+fn render_segment(segment: InlineSegment) -> Element {
+    match segment {
+        InlineSegment::Text(text) => rsx! { "{text}" },
+        InlineSegment::Bold(text) => rsx! {
+            strong { class: "font-semibold text-[var(--text-primary)]", "{text}" }
+        },
+        InlineSegment::Italic(text) => rsx! {
+            em { class: "italic", "{text}" }
+        },
+        InlineSegment::BoldItalic(text) => rsx! {
+            strong { class: "font-semibold italic text-[var(--text-primary)]", "{text}" }
+        },
+        InlineSegment::Code(code) => rsx! {
+            code { class: "px-1.5 py-0.5 rounded-md bg-[var(--bg-tertiary)] text-[var(--accent-primary)] font-mono text-[0.9em]", "{code}" }
+        },
+        InlineSegment::Link(text, url) => rsx! {
+            a {
+                href: "{url}",
+                target: "_blank",
+                rel: "noopener noreferrer",
+                class: "text-[var(--accent-primary)] hover:underline",
+                "{text}"
+            }
+        },
+        InlineSegment::InlineMath(math) => rsx! {
+            code { class: "px-1.5 py-0.5 rounded-md bg-[var(--accent-primary)]/10 text-[var(--accent-primary)] font-mono text-[0.9em] italic", "{math}" }
+        },
+    }
+}
+
+/// Check if content is a tool-related message
+fn is_tool_message(content: &str) -> Option<ToolMessageType> {
+    let trimmed = content.trim();
+    
+    // Detect by leading emoji
+    if trimmed.starts_with("🔧") || trimmed.starts_with("Utilisation de l'outil") {
+        return Some(ToolMessageType::InProgress);
+    }
+    if trimmed.starts_with('⏳') || trimmed.starts_with("Autorisation requise") {
+        return Some(ToolMessageType::PermissionRequired);
+    }
+    if trimmed.starts_with('🚫') || trimmed.starts_with("Permission refusée") || trimmed.starts_with("Demande d'autorisation expirée") {
+        return Some(ToolMessageType::PermissionDenied);
+    }
+    if trimmed.starts_with('✅') {
+        return Some(ToolMessageType::Result);
+    }
+    if trimmed.starts_with("Résultat de `") {
+        return Some(ToolMessageType::Result);
+    }
+    if trimmed.starts_with('❌') || trimmed.starts_with("Erreur pendant l'outil") {
+        return Some(ToolMessageType::Error);
+    }
+    if trimmed.starts_with("Outil introuvable") {
+        return Some(ToolMessageType::NotFound);
+    }
+    if trimmed.starts_with('⏱') {
+        return Some(ToolMessageType::PermissionDenied);
+    }
+    None
+}
+
+#[derive(Clone, PartialEq, Debug)]
+enum ToolMessageType {
+    InProgress,
+    PermissionRequired,
+    PermissionDenied,
+    Result,
+    Error,
+    NotFound,
+}
+
+/// Extract tool name from message content (looks for `tool_name` pattern)
+fn extract_tool_name(content: &str) -> Option<String> {
+    if let Some(start) = content.find('`') {
+        if let Some(end) = content[start + 1..].find('`') {
+            return Some(content[start + 1..start + 1 + end].to_string());
+        }
+    }
+    None
+}
+
+/// Extract detail text after the tool name section
+fn extract_detail(content: &str) -> Option<String> {
+    // For results: "✅ `tool` (Xs): detail text" -> extract detail text
+    // For permissions: "⏳ Autorisation ... Cible: detail" -> extract Cible value
+    if let Some(pos) = content.find("Cible:") {
+        let after = content[pos + 6..].trim();
+        if !after.is_empty() {
+            return Some(after.to_string());
+        }
+    }
+    // For results with colon after the parenthesis: "✅ `tool` (Xs): the detail"
+    if content.starts_with('✅') {
+        if let Some(paren_close) = content.find("):") {
+            let after = content[paren_close + 2..].trim();
+            if !after.is_empty() {
+                return Some(after.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Extract duration string like "(5.3s)" from content
+fn extract_duration(content: &str) -> Option<String> {
+    if let Some(start) = content.find('(') {
+        if let Some(end) = content[start..].find("s)") {
+            let dur = &content[start + 1..start + end];
+            // Check it looks like a number
+            if dur.parse::<f64>().is_ok() {
+                return Some(format!("{}s", dur));
+            }
+        }
+    }
+    None
+}
+
+/// Extract permission level from content like "(Réseau)" or "(Écriture fichier)"
+fn extract_permission_level(content: &str) -> Option<String> {
+    // Look for pattern after tool name: `tool` (Level)
+    if let Some(backtick_end) = content.rfind('`') {
+        let after = &content[backtick_end + 1..];
+        if let Some(paren_start) = after.find('(') {
+            if let Some(paren_end) = after[paren_start..].find(')') {
+                let level = &after[paren_start + 1..paren_start + paren_end];
+                if !level.is_empty() && !level.contains("itération") && level.parse::<f64>().is_err() {
+                    return Some(level.to_string());
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Premium tool status card component
+#[component]
+fn ToolCard(message_type: ToolMessageType, content: String) -> Element {
+    let tool_name = extract_tool_name(&content).unwrap_or_else(|| "outil".to_string());
+    let detail = extract_detail(&content);
+    let duration = extract_duration(&content);
+    let perm_level = extract_permission_level(&content);
+
+    // Determine accent color and icon based on type
+    let (accent_color, border_color, bg_color, status_label) = match message_type {
+        ToolMessageType::InProgress => (
+            "var(--accent-primary)",
+            "rgba(42, 107, 124, 0.20)",
+            "rgba(42, 107, 124, 0.04)",
+            "En cours",
+        ),
+        ToolMessageType::PermissionRequired => (
+            "var(--warning)",
+            "rgba(196, 153, 59, 0.20)",
+            "rgba(196, 153, 59, 0.04)",
+            "Autorisation",
+        ),
+        ToolMessageType::PermissionDenied => (
+            "var(--error)",
+            "rgba(196, 91, 91, 0.20)",
+            "rgba(196, 91, 91, 0.04)",
+            "Refusé",
+        ),
+        ToolMessageType::Result => (
+            "var(--success)",
+            "rgba(90, 158, 124, 0.20)",
+            "rgba(90, 158, 124, 0.04)",
+            "Terminé",
+        ),
+        ToolMessageType::Error => (
+            "var(--error)",
+            "rgba(196, 91, 91, 0.20)",
+            "rgba(196, 91, 91, 0.04)",
+            "Erreur",
+        ),
+        ToolMessageType::NotFound => (
+            "var(--warning)",
+            "rgba(196, 153, 59, 0.20)",
+            "rgba(196, 153, 59, 0.04)",
+            "Introuvable",
+        ),
+    };
+
+    let show_spinner = message_type == ToolMessageType::InProgress;
+    let is_result = message_type == ToolMessageType::Result;
+    let is_permission = message_type == ToolMessageType::PermissionRequired;
+
+    rsx! {
+        div { class: "mb-2 animate-fade-in",
+            div {
+                class: "rounded-xl overflow-hidden",
+                style: format!("border: 1px solid {}; background: {};", border_color, bg_color),
+
+                // Main row — compact, single line
+                div {
+                    class: "flex items-center gap-2.5 px-3 py-2",
+
+                    // Status dot
+                    div {
+                        class: "flex-shrink-0 w-2 h-2 rounded-full",
+                        style: format!("background: {};", accent_color),
+                        if show_spinner {
+                            // pulsing via class
+                        }
+                    }
+
+                    // Tool name badge
+                    span {
+                        class: "flex-shrink-0 px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold tracking-wide",
+                        style: format!("background: {}; color: {}; border: 1px solid {};", bg_color, accent_color, border_color),
+                        "{tool_name}"
+                    }
+
+                    // Detail text
+                    if is_permission {
+                        if let Some(ref level) = perm_level {
+                            span {
+                                class: "text-[var(--text-secondary)] text-xs",
+                                "{level}"
+                            }
+                        }
+                        if let Some(ref d) = detail {
+                            span { class: "text-[var(--text-tertiary)] text-[10px]", "·" }
+                            span {
+                                class: "text-[var(--text-secondary)] text-xs truncate flex-1",
+                                "{d}"
+                            }
+                        }
+                    } else if is_result {
+                        if let Some(ref d) = detail {
+                            span {
+                                class: "text-[var(--text-secondary)] text-xs truncate flex-1",
+                                "{d}"
+                            }
+                        }
+                    } else {
+                        // For errors and in-progress, show the remaining content
+                        span {
+                            class: "text-[var(--text-secondary)] text-xs truncate flex-1",
+                        }
+                    }
+
+                    // Right side — duration or status label
+                    if let Some(ref dur) = duration {
+                        span {
+                            class: "flex-shrink-0 text-[10px] font-mono text-[var(--text-tertiary)]",
+                            "{dur}"
+                        }
+                    }
+
+                    // Status indicator
+                    if show_spinner {
+                        div { class: "flex items-center gap-0.5 flex-shrink-0",
+                            div { class: "w-1 h-1 rounded-full animate-pulse", style: format!("background: {};", accent_color) }
+                            div { class: "w-1 h-1 rounded-full animate-pulse delay-100", style: format!("background: {};", accent_color) }
+                            div { class: "w-1 h-1 rounded-full animate-pulse delay-200", style: format!("background: {};", accent_color) }
+                        }
+                    } else {
+                        span {
+                            class: "flex-shrink-0 text-[10px] font-medium uppercase tracking-wider",
+                            style: format!("color: {};", accent_color),
+                            "{status_label}"
+                        }
+                    }
                 }
             }
         }
@@ -149,73 +1031,80 @@ fn ThinkingBlock(content: String) -> Element {
 pub fn MessageBubble(message: Message) -> Element {
     let is_user = message.role == MessageRole::User;
 
-    let container_class = if is_user {
-        "flex flex-row-reverse items-start gap-3 mb-6 animate-slide-in-right"
-    } else {
-        "flex flex-row items-start gap-3 mb-6 animate-slide-in-left"
-    };
+    // Check if this is a tool-related message
+    if !is_user {
+        if let Some(tool_type) = is_tool_message(&message.content) {
+            return rsx! {
+                div { class: "message-layout",
+                    ToolCard {
+                        message_type: tool_type,
+                        content: message.content.clone()
+                    }
+                }
+            };
+        }
+    }
 
-    let bubble_class = if is_user {
-        "max-w-[80%] bg-gradient-to-br from-[#06b6d4] to-[#3b82f6] text-white rounded-2xl rounded-br-sm px-4 py-3 shadow-lg shadow-cyan-500/20"
-    } else {
-        "max-w-[80%] bg-[var(--bg-secondary)] border border-white/5 rounded-2xl rounded-bl-sm px-4 py-3 backdrop-blur-sm"
-    };
-
-    let avatar_class = if is_user {
-        "w-8 h-8 rounded-full bg-gradient-to-br from-[#06b6d4] to-[#3b82f6] flex items-center justify-center text-white text-xs font-medium shadow-md shadow-cyan-500/20"
-    } else {
-        "w-8 h-8 rounded-full bg-[#3b82f6] flex items-center justify-center text-white text-xs font-medium shadow-md shadow-blue-500/20"
-    };
-
-    // Parse content for AI messages only
     let content_parts = if !is_user {
         parse_thinking_blocks(&message.content)
     } else {
         vec![ContentPart::Text(message.content.clone())]
     };
 
-    rsx! {
-        div { class: "{container_class}",
-            // Avatar
-            div {
-                class: "flex-shrink-0",
-                div {
-                    class: "{avatar_class}",
-
-                    if is_user {
-                        svg { width: "16", height: "16", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "2", path { d: "M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2" }, circle { cx: "12", cy: "7", r: "4" } }
-                    } else {
-                        svg { width: "16", height: "16", view_box: "0 0 24 24", fill: "none", stroke: "currentColor", stroke_width: "2", path { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" } }
-                    }
-                }
-            }
-
-            // Message Content
-            div {
-                class: "flex flex-col",
-
-                div {
-                    class: "{bubble_class}",
-                    // Render parsed content parts
-                    for part in content_parts {
-                        match part {
-                            ContentPart::Thinking(text) => rsx! {
-                                ThinkingBlock { content: text }
-                            },
-                            ContentPart::Text(text) => rsx! {
-                                div {
-                                    class: "whitespace-pre-wrap break-words",
-                                    "{text}"
-                                }
-                            },
+    if is_user {
+        // User message — right-aligned, accent-tinted glass
+        rsx! {
+            div { class: "message-layout animate-fade-in-up",
+                div { class: "flex justify-end mb-4",
+                    div {
+                        class: "message-user px-4 py-3 max-w-[85%]",
+                        div {
+                            class: "text-[15px] leading-relaxed text-[var(--text-primary)]",
+                            "{message.content}"
                         }
                     }
                 }
+            }
+        }
+    } else {
+        // Assistant message — with small avatar, no bubble
+        rsx! {
+            div { class: "message-layout animate-fade-in-up",
+                div { class: "flex items-start gap-3 mb-4",
+                    // LocaLM avatar — small circle with gradient
+                    div {
+                        class: "flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center mt-1",
+                        style: "background: var(--accent-primary); box-shadow: 0 4px 12px -4px rgba(42,107,124,0.25);",
+                        svg {
+                            class: "w-3 h-3",
+                            style: "color: #F2EDE7;",
+                            view_box: "0 0 24 24",
+                            fill: "none",
+                            stroke: "currentColor",
+                            stroke_width: "2.5",
+                            stroke_linecap: "round",
+                            stroke_linejoin: "round",
+                            path { d: "M21 15a2 2 0 0 1-2 2H7l-4 4V5a2 2 0 0 1 2-2h14a2 2 0 0 1 2 2z" }
+                        }
+                    }
 
-                // Optional: Add timestamp below
-                span {
-                    class: "text-xs text-[var(--text-tertiary)] mt-1 opacity-0 group-hover:opacity-100 transition-opacity",
-                    "12:34 PM"
+                    // Content
+                    div {
+                        class: "flex-1 min-w-0",
+                        for part in content_parts {
+                            match part {
+                                ContentPart::Thinking(text) => rsx! {
+                                    ThinkingBlock { content: text }
+                                },
+                                ContentPart::ThinkingStreaming(text) => rsx! {
+                                    ThinkingBlockStreaming { content: text }
+                                },
+                                ContentPart::Text(text) => rsx! {
+                                    MarkdownContent { content: text }
+                                },
+                            }
+                        }
+                    }
                 }
             }
         }

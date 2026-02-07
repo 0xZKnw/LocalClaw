@@ -13,12 +13,15 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 use uuid::Uuid;
+use tokio::time::{sleep, Duration, Instant};
 
 /// Permission level for agent operations.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Serialize, Deserialize)]
 pub enum PermissionLevel {
     /// Can only read files/system info
     ReadOnly,
+    /// Can write files (creates/modifies)
+    WriteFile,
     /// Can read/write files in allowed directories
     ReadWrite,
     /// Can execute safe commands (ls, cat, etc.)
@@ -29,14 +32,52 @@ pub enum PermissionLevel {
     Network,
 }
 
+impl std::fmt::Display for PermissionLevel {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PermissionLevel::ReadOnly => write!(f, "read"),
+            PermissionLevel::WriteFile => write!(f, "write"),
+            PermissionLevel::ReadWrite => write!(f, "rw"),
+            PermissionLevel::ExecuteSafe => write!(f, "exec"),
+            PermissionLevel::ExecuteUnsafe => write!(f, "exec!"),
+            PermissionLevel::Network => write!(f, "net"),
+        }
+    }
+}
+
 impl PermissionLevel {
     fn rank(self) -> u8 {
         match self {
             PermissionLevel::ReadOnly => 0,
-            PermissionLevel::ReadWrite => 1,
-            PermissionLevel::ExecuteSafe => 2,
-            PermissionLevel::ExecuteUnsafe => 3,
-            PermissionLevel::Network => 4,
+            PermissionLevel::WriteFile => 1,
+            PermissionLevel::ReadWrite => 2,
+            PermissionLevel::ExecuteSafe => 3,
+            PermissionLevel::ExecuteUnsafe => 4,
+            PermissionLevel::Network => 5,
+        }
+    }
+    
+    /// Human-readable label for UI
+    pub fn label(&self) -> &'static str {
+        match self {
+            PermissionLevel::ReadOnly => "Lecture seule",
+            PermissionLevel::WriteFile => "Écriture fichier",
+            PermissionLevel::ReadWrite => "Lecture/Écriture",
+            PermissionLevel::ExecuteSafe => "Commandes sûres",
+            PermissionLevel::ExecuteUnsafe => "Commandes dangereuses",
+            PermissionLevel::Network => "Réseau",
+        }
+    }
+    
+    /// Icon for UI
+    pub fn icon(&self) -> &'static str {
+        match self {
+            PermissionLevel::ReadOnly => "👁️",
+            PermissionLevel::WriteFile => "📝",
+            PermissionLevel::ReadWrite => "📂",
+            PermissionLevel::ExecuteSafe => "⚡",
+            PermissionLevel::ExecuteUnsafe => "⚠️",
+            PermissionLevel::Network => "🌐",
         }
     }
 }
@@ -178,6 +219,41 @@ impl PermissionManager {
     /// Checks whether a permission level is allowed by default.
     pub fn check_permission(&self, _tool: &str, level: PermissionLevel) -> bool {
         level.rank() <= self.default_level.rank()
+    }
+
+    /// Returns the decision for a request if it has been decided.
+    pub fn decision_for(&self, request_id: Uuid) -> Option<PermissionDecision> {
+        let approved = self.approved.lock().expect("approved mutex poisoned");
+        if approved.contains(&request_id) {
+            return Some(PermissionDecision::Approved);
+        }
+        drop(approved);
+
+        let denied = self.denied.lock().expect("denied mutex poisoned");
+        if denied.contains(&request_id) {
+            return Some(PermissionDecision::Denied);
+        }
+        None
+    }
+
+    /// Waits for a permission decision or times out.
+    pub async fn wait_for_decision(
+        &self,
+        request_id: Uuid,
+        timeout: Duration,
+    ) -> Option<PermissionDecision> {
+        let start = Instant::now();
+        loop {
+            if let Some(decision) = self.decision_for(request_id) {
+                return Some(decision);
+            }
+
+            if start.elapsed() >= timeout {
+                return None;
+            }
+
+            sleep(Duration::from_millis(200)).await;
+        }
     }
 
     /// Returns a snapshot of pending permission requests.

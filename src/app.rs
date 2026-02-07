@@ -4,8 +4,9 @@
 
 use crate::inference::LlamaEngine;
 use crate::storage::conversations::Conversation;
-use crate::storage::settings::AppSettings;
+use crate::storage::settings::{AppSettings, load_settings};
 use crate::ui::Layout;
+use crate::agent::{Agent, AgentConfig};
 use dioxus::prelude::*;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -23,6 +24,7 @@ pub enum ModelState {
 /// Global application state shared across components
 #[derive(Clone)]
 pub struct AppState {
+    pub agent: Arc<Agent>,
     pub engine: Arc<Mutex<LlamaEngine>>,
     pub current_conversation: Signal<Option<Conversation>>,
     pub conversations: Signal<Vec<Conversation>>,
@@ -35,10 +37,11 @@ impl AppState {
     pub fn new() -> Self {
         tracing::info!("AppState initialized");
         Self {
+            agent: Arc::new(Agent::new(AgentConfig::default())),
             engine: Arc::new(Mutex::new(LlamaEngine::new())),
             current_conversation: Signal::new(None),
             conversations: Signal::new(Vec::new()),
-            settings: Signal::new(AppSettings::default()),
+            settings: Signal::new(load_settings()),
             model_state: Signal::new(ModelState::NotLoaded),
             stop_signal: Arc::new(AtomicBool::new(false)),
         }
@@ -49,6 +52,18 @@ impl AppState {
 pub fn App() -> Element {
     let app_state = AppState::new();
     use_context_provider(|| app_state);
+
+    {
+        let agent = use_context::<AppState>().agent.clone();
+        use_effect(move || {
+            let agent = agent.clone();
+            spawn(async move {
+                if let Err(e) = agent.initialize_tools().await {
+                    tracing::error!("Failed to initialize tools: {}", e);
+                }
+            });
+        });
+    }
 
     rsx! {
         Layout {}

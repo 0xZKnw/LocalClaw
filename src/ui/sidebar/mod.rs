@@ -10,6 +10,7 @@ use dioxus::prelude::*;
 #[component]
 pub fn Sidebar(on_settings_click: EventHandler<MouseEvent>, on_new_chat: EventHandler<()>) -> Element {
     let app_state = use_context::<AppState>();
+    let is_en = app_state.settings.read().language == "en";
     tracing::debug!("Sidebar rendered");
 
     let handle_new = {
@@ -33,22 +34,24 @@ pub fn Sidebar(on_settings_click: EventHandler<MouseEvent>, on_new_chat: EventHa
     
     rsx! {
         aside {
-            class: "w-[280px] h-full flex flex-col bg-[var(--bg-secondary)]/60 backdrop-blur-2xl backdrop-saturate-150 border-r border-[var(--border-subtle)] z-10 transition-colors duration-300",
+            class: "w-64 h-full flex flex-col glass-panel z-20 animate-slide-in-left",
+            style: "border-radius: 0; border-left: none; border-top: none; border-bottom: none;",
             
             // Header with model picker
             div { 
-                class: "p-4 border-b border-[var(--border-subtle)] space-y-4",
+                class: "p-4 border-b border-[var(--border-subtle)] space-y-3",
                 
                 // Model Selector
                 ModelPicker {}
 
-                // New Chat button
+                // New Chat button — gradient
                 button {
                     onclick: handle_new,
-                    class: "w-full flex items-center gap-3 px-4 py-3 text-sm font-medium text-white bg-gradient-to-r from-[var(--accent-primary)] to-[var(--accent-secondary)] rounded-xl shadow-lg shadow-cyan-500/20 hover:shadow-cyan-500/40 hover:-translate-y-0.5 transition-all duration-200 group",
+                    class: "w-full flex items-center justify-center gap-2 px-4 py-2.5 text-sm font-semibold rounded-xl transition-all hover:scale-[1.02] active:scale-[0.98]",
+                    style: "background: var(--accent-primary); color: #F2EDE7; box-shadow: 0 2px 8px -2px rgba(42,107,124,0.25);",
                     
                     svg {
-                        class: "w-4 h-4 transition-transform group-hover:rotate-90",
+                        class: "w-4 h-4",
                         view_box: "0 0 24 24",
                         fill: "none",
                         stroke: "currentColor",
@@ -57,33 +60,29 @@ pub fn Sidebar(on_settings_click: EventHandler<MouseEvent>, on_new_chat: EventHa
                         stroke_linejoin: "round",
                         path { d: "M12 5v14M5 12h14" }
                     }
-                    "New Chat"
+                    if is_en { "New Chat" } else { "Nouveau Chat" }
                 }
             }
             
             // Conversation List
-            // We wrap it in a div to match the structure, but ConversationList handles its own scrolling/container
-            // We pass a class to ConversationList? No, it doesn't take props.
-            // We'll trust ConversationList updates to match the style.
             ConversationList {}
             
-            // Footer: User / Settings
+            // Footer: Settings
             div {
-                class: "p-4 border-t border-[var(--border-subtle)] bg-transparent", // Removed bg-[var(--bg-sidebar)] to keep glass effect
+                class: "p-3 border-t border-[var(--border-subtle)]",
                 
-                // Settings button
                 button {
                     onclick: on_settings_click,
-                    class: "w-full flex items-center gap-3 px-4 py-3 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] rounded-xl hover:bg-white/[0.05] transition-all duration-150 group",
+                    class: "w-full flex items-center gap-3 px-3 py-2.5 text-sm text-[var(--text-secondary)] hover:text-[var(--text-primary)] rounded-xl hover:bg-white/[0.06] transition-all group",
                     
                     div {
-                        class: "p-1.5 rounded-md bg-white/[0.05] text-[var(--text-tertiary)] group-hover:text-[var(--text-primary)] transition-colors",
+                        class: "p-1.5 rounded-lg bg-white/[0.04] text-[var(--text-tertiary)] group-hover:text-[var(--text-primary)] transition-colors",
                         svg {
                             class: "w-4 h-4 transition-transform group-hover:rotate-45",
                             view_box: "0 0 24 24",
                             fill: "none",
                             stroke: "currentColor",
-                            stroke_width: "2",
+                            stroke_width: "1.5",
                             stroke_linecap: "round",
                             stroke_linejoin: "round",
                             circle { cx: "12", cy: "12", r: "3" }
@@ -92,8 +91,12 @@ pub fn Sidebar(on_settings_click: EventHandler<MouseEvent>, on_new_chat: EventHa
                     }
                     div {
                         class: "flex flex-col items-start",
-                        span { class: "font-medium text-[var(--text-primary)]", "Settings" }
-                        span { class: "text-xs text-[var(--text-tertiary)]", "Preferences" }
+                        span { class: "font-medium text-[var(--text-primary)] text-sm",
+                            if is_en { "Settings" } else { "Parametres" }
+                        }
+                        span { class: "text-[11px] text-[var(--text-tertiary)]",
+                            if is_en { "Preferences" } else { "Preferences" }
+                        }
                     }
                 }
             }
