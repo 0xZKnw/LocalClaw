@@ -1,18 +1,88 @@
-use crate::app::AppState;
 use crate::agent::get_tool_permission;
+use crate::app::AppState;
 use crate::storage::settings::save_settings;
 use dioxus::prelude::*;
 
 /// Known tool groups for the allowlist UI
 const TOOL_GROUPS: &[(&str, &[&str], &str, &str)] = &[
     // (group_label_en, tool_names, icon, risk_level)
-    ("File Read", &["file_read", "file_list", "grep", "glob", "file_info", "file_search"], "📂", "safe"),
-    ("File Write", &["file_write", "file_edit", "file_create", "file_delete", "file_move", "file_copy", "directory_create"], "📝", "moderate"),
-    ("Shell / Bash", &["bash", "bash_background", "command"], "⚡", "dangerous"),
-    ("Git", &["git_status", "git_diff", "git_log", "git_commit", "git_branch", "git_stash"], "🔀", "moderate"),
-    ("Web / Network", &["web_search", "code_search", "company_research", "web_fetch", "web_download", "web_crawl"], "🌐", "moderate"),
-    ("Dev Tools", &["diff", "find_replace", "patch", "wc"], "🛠️", "safe"),
-    ("System", &["process_list", "environment", "system_info", "which", "tree"], "💻", "safe"),
+    (
+        "File Read",
+        &[
+            "file_read",
+            "file_list",
+            "grep",
+            "glob",
+            "file_info",
+            "file_search",
+        ],
+        "📂",
+        "safe",
+    ),
+    (
+        "File Write",
+        &[
+            "file_write",
+            "file_edit",
+            "file_create",
+            "file_delete",
+            "file_move",
+            "file_copy",
+            "directory_create",
+        ],
+        "📝",
+        "moderate",
+    ),
+    (
+        "Shell / Bash",
+        &["bash", "bash_background", "command"],
+        "⚡",
+        "dangerous",
+    ),
+    (
+        "Git",
+        &[
+            "git_status",
+            "git_diff",
+            "git_log",
+            "git_commit",
+            "git_branch",
+            "git_stash",
+        ],
+        "🔀",
+        "moderate",
+    ),
+    (
+        "Web / Network",
+        &[
+            "web_search",
+            "code_search",
+            "company_research",
+            "web_fetch",
+            "web_download",
+            "web_crawl",
+        ],
+        "🌐",
+        "moderate",
+    ),
+    (
+        "Dev Tools",
+        &["diff", "find_replace", "patch", "wc"],
+        "🛠️",
+        "safe",
+    ),
+    (
+        "System",
+        &[
+            "process_list",
+            "environment",
+            "system_info",
+            "which",
+            "tree",
+        ],
+        "💻",
+        "safe",
+    ),
 ];
 
 const TOOL_GROUPS_FR: &[&str] = &[

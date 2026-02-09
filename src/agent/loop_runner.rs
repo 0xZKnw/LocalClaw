@@ -161,24 +161,63 @@ impl AgentContext {
         }
     }
     
-    /// Check if we're stuck in a loop (repeated tool calls with same params)
+    /// Check if we're stuck in a loop (repeated tool calls, text patterns, or no progress)
     pub fn is_stuck(&self) -> bool {
-        if self.tool_history.len() < 3 {
-            return false;
-        }
-        
         // Check last 3 tool calls for repetition
-        let last_three: Vec<_> = self.tool_history.iter().rev().take(3).collect();
-        if last_three.len() < 3 {
-            return false;
+        if self.tool_history.len() >= 3 {
+            let last_three: Vec<_> = self.tool_history.iter().rev().take(3).collect();
+            let first = &last_three[0];
+            if last_three.iter().all(|entry| {
+                entry.tool_name == first.tool_name && 
+                entry.params.to_string() == first.params.to_string()
+            }) {
+                tracing::warn!("Stuck: repeated tool calls detected");
+                return true;
+            }
         }
         
-        // Check if all three have same tool and similar params
-        let first = &last_three[0];
-        last_three.iter().all(|entry| {
-            entry.tool_name == first.tool_name && 
-            entry.params.to_string() == first.params.to_string()
-        })
+        // Check for repeated response patterns (text loop without tools)
+        if let Some(ref last) = self.last_response {
+            // Check if any detected pattern appears in current response
+            for pattern in &self.detected_patterns {
+                if pattern.len() > 30 && last.contains(pattern) {
+                    tracing::warn!("Stuck: repeated text pattern detected");
+                    return true;
+                }
+            }
+        }
+        
+        // Check for too many iterations without any tool calls
+        if self.iteration > 4 && self.tool_history.is_empty() {
+            tracing::warn!("Stuck: {} iterations without tool usage", self.iteration);
+            return true;
+        }
+        
+        // Check for excessive iterations relative to tool calls
+        if self.iteration > 8 && self.tool_history.len() < 2 {
+            tracing::warn!("Stuck: {} iterations with only {} tool calls", 
+                self.iteration, self.tool_history.len());
+            return true;
+        }
+        
+        false
+    }
+    
+    /// Record a response pattern for loop detection
+    pub fn record_response(&mut self, response: &str) {
+        self.last_response = Some(response.to_string());
+        
+        // Extract significant patterns (chunks that might repeat)
+        if response.len() > 100 {
+            let pattern = response.chars().skip(50).take(80).collect::<String>();
+            if !pattern.trim().is_empty() {
+                self.detected_patterns.push(pattern);
+                // Keep only last 5 patterns
+                if self.detected_patterns.len() > 5 {
+                    self.detected_patterns.remove(0);
+                }
+            }
+        }
     }
     
     /// Get elapsed time
@@ -437,15 +476,30 @@ fn is_final_response(response: &str, ctx: &AgentContext) -> bool {
         return false; // First response, probably needs tools
     }
     
+    // Short responses after tool usage are usually final
+    if response.len() < 500 && !response.contains("{\"tool\"") {
+        return true;
+    }
+    
     // Check for final answer indicators
     let final_indicators = [
         "En résumé", "En conclusion", "Pour conclure",
-        "Voici la réponse", "J'ai terminé",
+        "Voici la réponse", "J'ai terminé", "Voilà",
+        "N'hésite pas", "Si tu as d'autres", "Dis-moi si",
         "In summary", "In conclusion", "To summarize",
-        "Here's the answer", "I've completed",
+        "Here's the answer", "I've completed", "Let me know if",
     ];
     
-    final_indicators.iter().any(|ind| response.contains(ind))
+    if final_indicators.iter().any(|ind| response.contains(ind)) {
+        return true;
+    }
+    
+    // No tool call JSON and reasonable length = probably final
+    if !response.contains(r#"{"tool""#) && response.len() > 100 && response.len() < 2000 {
+        return true;
+    }
+    
+    false
 }
 
 #[cfg(test)]

@@ -123,13 +123,21 @@ Pour utiliser un outil, réponds UNIQUEMENT avec un objet JSON dans ce format:
 {"tool": "nom_outil", "params": {...}}
 ```
 
-⚠️ IMPORTANT:
+⚠️ RÈGLES CRITIQUES:
 - Utilise UN SEUL outil par message
 - N'ajoute PAS de texte avant ou après le JSON
 - Attends le résultat avant de continuer
 - Si un outil échoue, essaie une approche différente
-- N'utilise JAMAIS de placeholders comme "<the content>", "<contenu>", "<résultat>" dans les paramètres des outils. Mets TOUJOURS le vrai contenu, les vraies données. Si tu dois écrire dans un fichier, écris le CONTENU REEL et COMPLET, pas un placeholder.
-- Quand tu utilises file_write après un web_search, tu DOIS utiliser les données réelles obtenues du web_search dans le champ "content"
+- N'utilise JAMAIS de placeholders comme "<the content>", "<contenu>", "<résultat>" dans les paramètres des outils. Mets TOUJOURS le vrai contenu, les vraies données.
+
+🚫 INTERDICTIONS ABSOLUES - NE FAIS JAMAIS CECI:
+- NE GÉNÈRE JAMAIS de faux résultats d'outils (comme "✅ pdf_read: ..." ou "Contenu du PDF:")
+- NE PRÉTENDS JAMAIS avoir exécuté un outil - c'est le SYSTÈME qui exécute les outils, pas toi
+- NE SIMULE JAMAIS le retour d'un outil avec du texte inventé
+- NE GÉNÈRE JAMAIS de bloc de code qui ressemble à un résultat d'outil
+- Si tu veux utiliser un outil, émets UNIQUEMENT le JSON brut, rien d'autre
+
+Si tu n'as pas reçu de message système avec le résultat réel d'un outil, c'est que l'outil N'A PAS ÉTÉ EXÉCUTÉ. Dans ce cas, soit tu appelles vraiment l'outil avec le JSON, soit tu réponds sans outil.
 
 "#,
     );
@@ -363,6 +371,23 @@ Inclus:
 "#,
         context
     )
+}
+
+/// Build a context compression prompt (OpenCode-style)
+/// This asks the LLM to summarize the conversation to free up context space
+pub fn build_context_compression_prompt() -> String {
+    r#"## COMPRESSION DE CONTEXTE REQUISE
+
+Le contexte de la conversation est presque saturé. Tu dois maintenant créer un résumé concis de tout ce qui s'est passé dans cette conversation.
+
+**Instructions:**
+1. Résume les points ESSENTIELS de la conversation jusqu'ici
+2. Inclus: les questions de l'utilisateur, les actions effectuées, les résultats importants
+3. Omet les détails techniques verbeux et les erreurs résolues
+4. Garde UNIQUEMENT ce qui est nécessaire pour continuer la conversation
+5. Format: un paragraphe dense de 200-400 mots maximum
+
+**Réponds UNIQUEMENT avec le résumé, sans introduction ni conclusion.**"#.to_string()
 }
 
 #[cfg(test)]

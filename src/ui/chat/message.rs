@@ -188,9 +188,12 @@ fn ThinkingBlock(content: String) -> Element {
     }
 }
 
-/// Streaming thinking block - elegant, always expanded with soft animation
+/// Streaming thinking block - elegant, subtle with soft animation
 #[component]
 fn ThinkingBlockStreaming(content: String) -> Element {
+    let app_state = use_context::<AppState>();
+    let is_en = app_state.settings.read().language == "en";
+    
     let display_content = if content.trim().is_empty() {
         "...".to_string()
     } else {
@@ -198,25 +201,40 @@ fn ThinkingBlockStreaming(content: String) -> Element {
     };
     
     rsx! {
-        div { class: "thinking-stream my-3",
-            // Header with animated dots
+        div { class: "thinking-stream my-2",
+            // Header with subtle animated dots
             div {
                 class: "thinking-header",
+                style: "padding: 0.5rem 0.75rem;",
 
                 div { class: "flex items-center gap-1",
-                    div { class: "w-1.5 h-1.5 rounded-full bg-[var(--accent-primary)] animate-pulse" }
-                    div { class: "w-1.5 h-1.5 rounded-full bg-[var(--accent-primary)] animate-pulse delay-150" }
-                    div { class: "w-1.5 h-1.5 rounded-full bg-[var(--accent-primary)] animate-pulse delay-300" }
+                    div { 
+                        class: "w-1 h-1 rounded-full animate-pulse",
+                        style: "background: var(--accent-primary); opacity: 0.6;"
+                    }
+                    div { 
+                        class: "w-1 h-1 rounded-full animate-pulse delay-150",
+                        style: "background: var(--accent-primary); opacity: 0.6;"
+                    }
+                    div { 
+                        class: "w-1 h-1 rounded-full animate-pulse delay-300",
+                        style: "background: var(--accent-primary); opacity: 0.6;"
+                    }
                 }
 
-                span { "Reflexion en cours..." }
+                span { 
+                    class: "text-xs",
+                    style: "color: var(--text-tertiary);",
+                    if is_en { "Thinking..." } else { "Reflexion en cours..." }
+                }
             }
 
-            // Content
+            // Content - more compact
             div {
-                class: "px-4 pb-3 max-h-48 overflow-y-auto scrollbar-thin",
+                class: "px-3 pb-2 max-h-40 overflow-y-auto scrollbar-thin",
                 p {
-                    class: "text-sm text-[var(--text-secondary)] leading-relaxed whitespace-pre-wrap",
+                    class: "text-xs leading-relaxed whitespace-pre-wrap",
+                    style: "color: var(--text-secondary);",
                     "{display_content}"
                 }
             }
@@ -892,134 +910,98 @@ fn extract_permission_level(content: &str) -> Option<String> {
     None
 }
 
-/// Premium tool status card component
+/// Premium tool status card component - ultra minimal design
 #[component]
 fn ToolCard(message_type: ToolMessageType, content: String) -> Element {
-    let tool_name = extract_tool_name(&content).unwrap_or_else(|| "outil".to_string());
+    let tool_name = extract_tool_name(&content).unwrap_or_else(|| "tool".to_string());
     let detail = extract_detail(&content);
     let duration = extract_duration(&content);
-    let perm_level = extract_permission_level(&content);
 
-    // Determine accent color and icon based on type
-    let (accent_color, border_color, bg_color, status_label) = match message_type {
-        ToolMessageType::InProgress => (
-            "var(--accent-primary)",
-            "rgba(42, 107, 124, 0.20)",
-            "rgba(42, 107, 124, 0.04)",
-            "En cours",
-        ),
-        ToolMessageType::PermissionRequired => (
-            "var(--warning)",
-            "rgba(196, 153, 59, 0.20)",
-            "rgba(196, 153, 59, 0.04)",
-            "Autorisation",
-        ),
-        ToolMessageType::PermissionDenied => (
-            "var(--error)",
-            "rgba(196, 91, 91, 0.20)",
-            "rgba(196, 91, 91, 0.04)",
-            "Refusé",
-        ),
-        ToolMessageType::Result => (
-            "var(--success)",
-            "rgba(90, 158, 124, 0.20)",
-            "rgba(90, 158, 124, 0.04)",
-            "Terminé",
-        ),
-        ToolMessageType::Error => (
-            "var(--error)",
-            "rgba(196, 91, 91, 0.20)",
-            "rgba(196, 91, 91, 0.04)",
-            "Erreur",
-        ),
-        ToolMessageType::NotFound => (
-            "var(--warning)",
-            "rgba(196, 153, 59, 0.20)",
-            "rgba(196, 153, 59, 0.04)",
-            "Introuvable",
-        ),
+    // Minimal accent colors using CSS variables
+    let (accent_var, status_icon) = match message_type {
+        ToolMessageType::InProgress => ("var(--accent-primary)", "●"),
+        ToolMessageType::PermissionRequired => ("var(--warning)", "◐"),
+        ToolMessageType::PermissionDenied => ("var(--error)", "○"),
+        ToolMessageType::Result => ("var(--success)", "●"),
+        ToolMessageType::Error => ("var(--error)", "●"),
+        ToolMessageType::NotFound => ("var(--warning)", "○"),
     };
 
     let show_spinner = message_type == ToolMessageType::InProgress;
-    let is_result = message_type == ToolMessageType::Result;
-    let is_permission = message_type == ToolMessageType::PermissionRequired;
+    let is_success = message_type == ToolMessageType::Result;
+    let is_error = message_type == ToolMessageType::Error || message_type == ToolMessageType::PermissionDenied;
+
+    // Compute duration style outside rsx for type inference
+    let duration_style = if is_success {
+        "color: var(--success);"
+    } else if is_error {
+        "color: var(--error);"
+    } else {
+        "color: var(--text-tertiary);"
+    };
 
     rsx! {
-        div { class: "mb-2 animate-fade-in",
+        div { 
+            class: "animate-fade-in",
+            style: "margin: 0.35rem 0;",
+            
+            // Ultra-minimal single line
             div {
-                class: "rounded-xl overflow-hidden",
-                style: format!("border: 1px solid {}; background: {};", border_color, bg_color),
+                class: "flex items-center gap-2",
+                style: format!(
+                    "padding: 0.4rem 0.5rem; border-left: 2px solid {}; background: linear-gradient(90deg, rgba(42,107,124,0.03) 0%, transparent 100%); border-radius: 0 8px 8px 0;",
+                    accent_var
+                ),
 
-                // Main row — compact, single line
-                div {
-                    class: "flex items-center gap-2.5 px-3 py-2",
-
-                    // Status dot
-                    div {
-                        class: "flex-shrink-0 w-2 h-2 rounded-full",
-                        style: format!("background: {};", accent_color),
-                        if show_spinner {
-                            // pulsing via class
+                // Status indicator - dot or spinner
+                if show_spinner {
+                    div { 
+                        class: "flex items-center gap-0.5",
+                        div { 
+                            class: "w-1 h-1 rounded-full animate-pulse",
+                            style: format!("background: {};", accent_var)
+                        }
+                        div { 
+                            class: "w-1 h-1 rounded-full animate-pulse delay-100",
+                            style: format!("background: {};", accent_var)
+                        }
+                        div { 
+                            class: "w-1 h-1 rounded-full animate-pulse delay-200",
+                            style: format!("background: {};", accent_var)
                         }
                     }
-
-                    // Tool name badge
+                } else {
                     span {
-                        class: "flex-shrink-0 px-2 py-0.5 rounded-md text-[11px] font-mono font-semibold tracking-wide",
-                        style: format!("background: {}; color: {}; border: 1px solid {};", bg_color, accent_color, border_color),
-                        "{tool_name}"
+                        class: "text-[8px]",
+                        style: format!("color: {}; opacity: 0.8;", accent_var),
+                        "{status_icon}"
                     }
+                }
 
-                    // Detail text
-                    if is_permission {
-                        if let Some(ref level) = perm_level {
-                            span {
-                                class: "text-[var(--text-secondary)] text-xs",
-                                "{level}"
-                            }
-                        }
-                        if let Some(ref d) = detail {
-                            span { class: "text-[var(--text-tertiary)] text-[10px]", "·" }
-                            span {
-                                class: "text-[var(--text-secondary)] text-xs truncate flex-1",
-                                "{d}"
-                            }
-                        }
-                    } else if is_result {
-                        if let Some(ref d) = detail {
-                            span {
-                                class: "text-[var(--text-secondary)] text-xs truncate flex-1",
-                                "{d}"
-                            }
-                        }
-                    } else {
-                        // For errors and in-progress, show the remaining content
-                        span {
-                            class: "text-[var(--text-secondary)] text-xs truncate flex-1",
-                        }
+                // Tool name - clean monospace
+                span {
+                    class: "font-mono text-xs font-medium",
+                    style: format!("color: {};", accent_var),
+                    "{tool_name}"
+                }
+
+                // Detail or result summary
+                if let Some(ref d) = detail {
+                    span { 
+                        class: "text-xs truncate flex-1",
+                        style: "color: var(--text-secondary); max-width: 300px;",
+                        "{d}"
                     }
+                }
 
-                    // Right side — duration or status label
-                    if let Some(ref dur) = duration {
-                        span {
-                            class: "flex-shrink-0 text-[10px] font-mono text-[var(--text-tertiary)]",
-                            "{dur}"
-                        }
-                    }
-
-                    // Status indicator
-                    if show_spinner {
-                        div { class: "flex items-center gap-0.5 flex-shrink-0",
-                            div { class: "w-1 h-1 rounded-full animate-pulse", style: format!("background: {};", accent_color) }
-                            div { class: "w-1 h-1 rounded-full animate-pulse delay-100", style: format!("background: {};", accent_color) }
-                            div { class: "w-1 h-1 rounded-full animate-pulse delay-200", style: format!("background: {};", accent_color) }
-                        }
-                    } else {
-                        span {
-                            class: "flex-shrink-0 text-[10px] font-medium uppercase tracking-wider",
-                            style: format!("color: {};", accent_color),
-                            "{status_label}"
-                        }
+                // Right side - duration only (no verbose labels)
+                div { class: "flex-1" } // spacer
+                
+                if let Some(ref dur) = duration {
+                    span {
+                        class: "font-mono text-[10px]",
+                        style: "{duration_style}",
+                        "{dur}"
                     }
                 }
             }

@@ -1,5 +1,5 @@
 use crate::app::AppState;
-use crate::storage::settings::{save_settings, default_system_prompt_for_lang};
+use crate::storage::settings::{default_system_prompt_for_lang, save_settings};
 use dioxus::prelude::*;
 
 pub fn AppearanceSettings() -> Element {

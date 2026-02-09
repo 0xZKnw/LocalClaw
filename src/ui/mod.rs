@@ -52,12 +52,12 @@ fn HeaderModelPicker() -> Element {
             std::path::Path::new(path)
                 .file_stem()
                 .and_then(|s| s.to_str())
-                .map(|s| if s.len() > 20 { format!("{}...", &s[..20]) } else { s.to_string() })
+                .map(|s| if s.len() > 20 { format!("{}...", crate::truncate_str(s, 20)) } else { s.to_string() })
                 .unwrap_or_else(|| "Model".to_string())
         }
         ModelState::Loading => if is_en { "Loading..." } else { "Chargement..." }.to_string(),
         ModelState::Error(msg) => {
-            let short = if msg.len() > 20 { format!("{}...", &msg[..20]) } else { msg.clone() };
+            let short = if msg.len() > 20 { format!("{}...", crate::truncate_str(&msg, 20)) } else { msg.clone() };
             format!("{}", short)
         }
         ModelState::NotLoaded => if is_en { "No model" } else { "Aucun modele" }.to_string(),

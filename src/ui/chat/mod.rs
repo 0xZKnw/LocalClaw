@@ -25,6 +25,7 @@ use crate::agent::loop_runner::ToolHistoryEntry;
 use crate::agent::tools::ToolResult;
 use crate::agent::prompts::build_agent_system_prompt;
 use crate::agent::prompts::build_reflection_prompt;
+use crate::agent::prompts::build_context_compression_prompt;
 use crate::app::{AppState, ModelState};
 use crate::inference::engine::GenerationParams;
 use crate::inference::streaming::StreamToken;
@@ -33,6 +34,61 @@ use crate::types::message::{Message as StorageMessage, Role as StorageRole};
 use chrono::Utc;
 use uuid::Uuid;
 use std::time::Instant;
+
+/// Detect if generated text is garbage/corrupted (model hallucinating)
+fn is_garbage_text(content: &str) -> bool {
+    let lower = content.to_lowercase();
+    
+    // Patterns that indicate model is generating fake tool outputs
+    let garbage_patterns = [
+        "assistantcommentary",
+        "userresponse",
+        "toolresult:",
+        "✅ pdf_read:",
+        "✅ file_read:",
+        "contenu du pdf:",
+    ];
+    
+    for pattern in garbage_patterns {
+        if lower.matches(pattern).count() > 2 {
+            tracing::warn!("Garbage detected: pattern '{}' repeated", pattern);
+            return true;
+        }
+    }
+    
+    // Check for abnormal word/char ratio (text stuck together without spaces)
+    let words = content.split_whitespace().count();
+    if content.len() > 300 && words > 0 {
+        let avg_word_len = content.len() / words;
+        if avg_word_len > 25 {
+            tracing::warn!("Garbage detected: abnormal word length ratio {}", avg_word_len);
+            return true;
+        }
+    }
+    
+    // Check for excessive repetition of any 10+ char sequence
+    if content.len() > 200 {
+        let chunks: Vec<&str> = content.as_bytes()
+            .chunks(20)
+            .filter_map(|c| std::str::from_utf8(c).ok())
+            .collect();
+        if chunks.len() > 5 {
+            let first = chunks[0];
+            let repeat_count = chunks.iter().filter(|c| *c == &first).count();
+            if repeat_count > 3 {
+                tracing::warn!("Garbage detected: repeated chunk pattern");
+                return true;
+            }
+        }
+    }
+    
+    false
+}
+
+/// Estimate token count from message content (~4 chars per token)
+fn estimate_tokens(messages: &[Message]) -> usize {
+    messages.iter().map(|m| m.content.len() / 4).sum()
+}
 
 #[component]
 pub fn ChatView() -> Element {
@@ -133,6 +189,9 @@ pub fn ChatView() -> Element {
                     base_system_prompt.clone()
                 };
 
+                // Compression guard counter (allows proactive + post-truncation before stopping)
+                let mut compression_count: u32 = 0;
+
                 // Advanced agent loop
                 while agent_ctx.iteration < max_iterations {
                     agent_ctx.iteration += 1;
@@ -201,6 +260,66 @@ pub fn ChatView() -> Element {
                         prompt_messages
                     };
 
+                    // === PROACTIVE COMPRESSION ===
+                    // Check if we're approaching context limit BEFORE generation
+                    let estimated_tokens: usize = prompt_messages.iter()
+                        .map(|m| m.content.len() / 4)
+                        .sum();
+                    let threshold = (params.max_context_size as usize) * 75 / 100;
+                    
+                    if estimated_tokens > threshold && compression_count == 0 {
+                        tracing::info!(
+                            "Proactive compression: {}% capacity ({}/{} tokens)",
+                            estimated_tokens * 100 / params.max_context_size as usize,
+                            estimated_tokens,
+                            params.max_context_size
+                        );
+                        
+                        // Apply zero-cost pruning to messages signal
+                        {
+                            let mut msgs = messages.write();
+                            let msg_count = msgs.len();
+                            
+                            // Truncate long system messages
+                            for msg in msgs.iter_mut() {
+                                if msg.content.len() > 2000 {
+                                    msg.content = format!(
+                                        "{}...\n[Tronqué: {} caractères originaux]",
+                                        &msg.content.chars().take(1500).collect::<String>(),
+                                        msg.content.len()
+                                    );
+                                }
+                            }
+                            
+                            // Keep only recent messages if too many
+                            if msg_count > 6 {
+                                let keep = 4;
+                                let summary = format!(
+                                    "[{} messages précédents compressés]",
+                                    msg_count - keep
+                                );
+                                let recent: Vec<_> = msgs.iter().rev().take(keep).cloned().collect();
+                                msgs.clear();
+                                msgs.push(Message {
+                                    role: MessageRole::System,
+                                    content: summary,
+                                });
+                                msgs.extend(recent.into_iter().rev());
+                            }
+                        }
+                        
+                        compression_count += 1;
+
+                        // Notify user
+                        messages.write().push(Message {
+                            role: MessageRole::System,
+                            content: "💾 Compression proactive du contexte appliquée.".to_string(),
+                        });
+
+                        // Restart loop to rebuild prompt_messages from compressed messages
+                        continue;
+                    }
+
                     // Generate response
                     agent_ctx.state = AgentState::Thinking;
                     
@@ -224,6 +343,7 @@ pub fn ChatView() -> Element {
 
                     // Stream tokens - drain all available tokens per tick for smooth display
                     let mut stream_done = false;
+                    let mut was_truncated = false;
                     while !stream_done {
                         if app_state.stop_signal.load(Ordering::Relaxed) {
                             stop_signal.store(true, Ordering::Relaxed);
@@ -240,6 +360,15 @@ pub fn ChatView() -> Element {
                                     got_any = true;
                                 }
                                 Ok(StreamToken::Done) => {
+                                    stream_done = true;
+                                    break;
+                                }
+                                Ok(StreamToken::Truncated { tokens_generated, max_tokens }) => {
+                                    tracing::warn!(
+                                        "Response truncated: {} tokens generated out of {} max",
+                                        tokens_generated, max_tokens
+                                    );
+                                    was_truncated = true;
                                     stream_done = true;
                                     break;
                                 }
@@ -262,12 +391,172 @@ pub fn ChatView() -> Element {
                             let mut msgs = messages.write();
                             if let Some(last) = msgs.last_mut() {
                                 last.content.push_str(&batch_text);
+                                
+                                // Check for garbage text (model hallucinating)
+                                if last.content.len() > 200 && is_garbage_text(&last.content) {
+                                    tracing::error!("Garbage text detected, stopping generation");
+                                    last.content = "⚠️ Génération interrompue: texte corrompu détecté. Reformulons.\n\n".to_string();
+                                    stream_done = true;
+                                    // Break the outer loop after this
+                                }
                             }
                         }
                         
                         if !stream_done && !got_any {
                             // No tokens available, yield briefly
                             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                        }
+                    }
+
+                    // === OPTIMIZED CONTEXT COMPRESSION ===
+                    // If response was truncated due to context saturation, apply smart compression
+                    if was_truncated && !app_state.stop_signal.load(Ordering::Relaxed) {
+                        // Guard: allow proactive + post-truncation (2 total) before stopping
+                        if compression_count >= 2 {
+                            tracing::warn!("Already compressed {} times this session, stopping to avoid loop", compression_count);
+                            break;
+                        }
+                        compression_count += 1;
+                        
+                        let msg_count = messages.read().len();
+                        let total_chars: usize = messages.read().iter().map(|m| m.content.len()).sum();
+                        
+                        tracing::info!("Context saturated ({} msgs, {} chars), applying compression", msg_count, total_chars);
+                        
+                        // === PHASE 1: ZERO-COST PRUNING (no LLM) ===
+                        // Truncate long system messages (tool results, etc.) - they're already processed
+                        let mut chars_saved = 0usize;
+                        {
+                            let mut msgs = messages.write();
+                            for msg in msgs.iter_mut() {
+                                if msg.role == MessageRole::System && msg.content.len() > 2000 {
+                                    let original_len = msg.content.len();
+                                    // Keep first 500 chars + indicator
+                                    let truncated = format!(
+                                        "{}...\n\n[Contenu tronqué - {} caractères]",
+                                        &msg.content[..500.min(msg.content.len())],
+                                        original_len
+                                    );
+                                    chars_saved += original_len - truncated.len();
+                                    msg.content = truncated;
+                                }
+                            }
+                        }
+                        
+                        if chars_saved > 0 {
+                            tracing::info!("Zero-cost pruning saved {} chars", chars_saved);
+                        }
+                        
+                        // Check if pruning was enough
+                        let new_total: usize = messages.read().iter().map(|m| m.content.len()).sum();
+                        if new_total < 12000 && agent_ctx.iteration < 3 {
+                            // Pruning was enough AND we haven't retried too many times
+                            tracing::info!("Pruning sufficient ({}→{} chars), one more attempt", total_chars, new_total);
+                            continue;
+                        } else if new_total < 12000 {
+                            // Pruning worked but we've already retried, stop here
+                            tracing::info!("Pruning done, stopping after {} iterations", agent_ctx.iteration);
+                            break;
+                        }
+                        
+                        // === PHASE 2: LLM SUMMARY (if pruning wasn't enough) ===
+                        if msg_count > 2 {
+                            // Indicate compression to user
+                            {
+                                let mut msgs = messages.write();
+                                if let Some(last) = msgs.last_mut() {
+                                    if !last.content.is_empty() && !last.content.contains("Compression") {
+                                        last.content.push_str("\n\n⚡ *Compression du contexte...*");
+                                    }
+                                }
+                            }
+                            
+                            // Build compact summary request (only key info, very truncated)
+                            let summary_request: String = {
+                                let msgs = messages.read();
+                                msgs.iter()
+                                    .take(msg_count.saturating_sub(2))
+                                    .filter(|m| m.role != MessageRole::System)
+                                    .map(|m| {
+                                        let role = match m.role {
+                                            MessageRole::User => "U",
+                                            MessageRole::Assistant => "A",
+                                            MessageRole::System => "S",
+                                        };
+                                        let content = if m.content.len() > 200 {
+                                            format!("{}...", &m.content[..200])
+                                        } else {
+                                            m.content.clone()
+                                        };
+                                        format!("[{}]: {}", role, content)
+                                    })
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            };
+                            
+                            let compression_prompt = format!(
+                                "{}\n\n---\n{}",
+                                build_context_compression_prompt(),
+                                summary_request
+                            );
+                            
+                            let summary_params = GenerationParams {
+                                max_tokens: 600,
+                                temperature: 0.2,
+                                max_context_size: 4096,
+                                ..params.clone()
+                            };
+                            
+                            let summary_messages = vec![
+                                StorageMessage::new(StorageRole::User, compression_prompt),
+                            ];
+                            
+                            let summary = {
+                                let engine = app_state.engine.lock().await;
+                                if let Ok((rx, _)) = engine.generate_stream_messages(summary_messages, summary_params) {
+                                    let mut text = String::new();
+                                    while let Ok(token) = rx.recv() {
+                                        match token {
+                                            StreamToken::Token(t) => text.push_str(&t),
+                                            StreamToken::Done | StreamToken::Truncated { .. } => break,
+                                            StreamToken::Error(_) => break,
+                                        }
+                                    }
+                                    text
+                                } else {
+                                    "Conversation précédente résumée.".to_string()
+                                }
+                            };
+                            
+                            tracing::info!("LLM summary: {} chars", summary.len());
+                            
+                            // Replace messages with summary + last message
+                            {
+                                let mut msgs = messages.write();
+                                let last_msg = msgs.last().cloned();
+                                msgs.clear();
+                                
+                                msgs.push(Message {
+                                    role: MessageRole::System,
+                                    content: format!("📋 {}", summary),
+                                });
+                                
+                                if let Some(msg) = last_msg {
+                                    if !msg.content.is_empty() {
+                                        msgs.push(msg);
+                                    }
+                                }
+                                
+                                msgs.push(Message {
+                                    role: MessageRole::Assistant,
+                                    content: String::new(),
+                                });
+                            }
+                            
+                            continue;
+                        } else {
+                            tracing::warn!("Cannot compress further, stopping");
+                            break;
                         }
                     }
 
@@ -312,10 +601,18 @@ pub fn ChatView() -> Element {
                     agent_ctx.last_response = Some(last_text.clone());
 
                     let tool_call = match extract_tool_call(&last_text) {
-                        Some(call) => call,
+                        Some(call) => {
+                            tracing::info!("Tool call extracted: {} with params keys: {:?}",
+                                call.tool,
+                                call.params.as_object().map(|o| o.keys().cloned().collect::<Vec<_>>()).unwrap_or_default()
+                            );
+                            call
+                        }
                         None => {
                             // No tool call found — check if the LLM maybe tried but malformed the JSON
-                            let looks_like_failed_json = last_text.contains("\"tool\"") || last_text.contains("{\"tool") || last_text.contains("```json");
+                            // Be strict: must have both "tool" AND JSON object markers
+                            let looks_like_failed_json = (last_text.contains("{\"tool\"") || last_text.contains("{ \"tool\"")) 
+                                && last_text.contains("\"params\"");
                             
                             if looks_like_failed_json && agent_ctx.consecutive_errors < 2 {
                                 // LLM tried to call a tool but the JSON was malformed
@@ -333,6 +630,7 @@ pub fn ChatView() -> Element {
                             
                             // Genuine final response (no tool call intended)
                             agent_ctx.state = AgentState::Completed;
+                            tracing::info!("Final response detected (no tool call), breaking loop");
                             break;
                         }
                     };
@@ -372,11 +670,17 @@ pub fn ChatView() -> Element {
                     };
 
                     // Check auto-approve settings before asking user
+                    // Internal safe tools are always auto-approved
+                    let is_internal_safe_tool = matches!(tool_call.tool.as_str(),
+                        "skill_create" | "skill_invoke" | "skill_list" | "think" | "todo_write"
+                    );
                     let auto_approved = {
                         let settings = app_state.settings.read();
                         settings.auto_approve_all_tools
                             || settings.tool_allowlist.contains(&tool_call.tool)
+                            || is_internal_safe_tool
                     };
+                    tracing::info!("Tool {} permission check: level={:?}, auto_approved={}", tool_call.tool, permission_level, auto_approved);
 
                     let permission_result = if auto_approved {
                         PermissionResult::Approved
@@ -392,6 +696,7 @@ pub fn ChatView() -> Element {
                         PermissionResult::Approved => true,
                         PermissionResult::Pending => {
                             agent_ctx.state = AgentState::WaitingForUser;
+                            tracing::info!("Waiting for user approval for tool: {}", tool_call.tool);
                             {
                                 let mut msgs = messages.write();
                                 if let Some(last) = msgs.last_mut() {
@@ -504,6 +809,7 @@ pub fn ChatView() -> Element {
                         }
                     };
 
+                    tracing::info!("Executing tool: {} with timeout {}s", tool_call.tool, tool_timeout_secs);
                     let start_time = Instant::now();
                     let tool_result: Result<ToolResult, String> = match tokio::time::timeout(
                         std::time::Duration::from_secs(tool_timeout_secs),
@@ -522,6 +828,9 @@ pub fn ChatView() -> Element {
                     
                     match tool_result {
                         Ok(result) => {
+                            tracing::info!("Tool {} executed successfully in {}ms: success={}, message_len={}",
+                                tool_call.tool, duration_ms, result.success, result.message.len()
+                            );
                             // Record success in history
                             agent_ctx.tool_history.push(ToolHistoryEntry {
                                 tool_name: tool_call.tool.clone(),
@@ -532,9 +841,10 @@ pub fn ChatView() -> Element {
                                 duration_ms,
                             });
 
-                            // Show result summary
+                            // Show result summary (safe truncation)
                             let result_preview = if result.message.len() > 200 {
-                                format!("{}...", &result.message[..200])
+                                let safe = crate::truncate_str(&result.message, 200);
+                                format!("{}...", safe)
                             } else {
                                 result.message.clone()
                             };
@@ -549,10 +859,17 @@ pub fn ChatView() -> Element {
                                 ),
                             });
 
-                            // Inject tool result for LLM
+                            // Inject tool result for LLM (capped to prevent context overflow)
+                            let tool_result_text = format_tool_result_for_system(&tool_call.tool, &result);
+                            let tool_result_text = if tool_result_text.len() > 4000 {
+                                let truncated: String = tool_result_text.chars().take(3500).collect();
+                                format!("{}...\n[Résultat tronqué: {} caractères au total]", truncated, tool_result_text.len())
+                            } else {
+                                tool_result_text
+                            };
                             messages.write().push(Message {
                                 role: MessageRole::System,
-                                content: format_tool_result_for_system(&tool_call.tool, &result),
+                                content: tool_result_text,
                             });
 
                             // Prepare for reflection/next iteration
@@ -563,6 +880,7 @@ pub fn ChatView() -> Element {
                             });
                         }
                         Err(e) => {
+                            tracing::warn!("Tool {} failed after {}ms: {}", tool_call.tool, duration_ms, e);
                             // Record error in history
                             agent_ctx.tool_history.push(ToolHistoryEntry {
                                 tool_name: tool_call.tool.clone(),

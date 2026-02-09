@@ -254,7 +254,7 @@ impl TaskPlan {
             }
             if let Some(ref result) = task.result {
                 let truncated = if result.len() > 100 {
-                    format!("{}...", &result[..100])
+                    format!("{}...", crate::truncate_str(result, 100))
                 } else {
                     result.clone()
                 };

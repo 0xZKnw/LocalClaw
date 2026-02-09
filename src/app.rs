@@ -36,12 +36,16 @@ pub struct AppState {
 impl AppState {
     pub fn new() -> Self {
         tracing::info!("AppState initialized");
+        let settings = load_settings();
+        let mut agent_config = AgentConfig::default();
+        agent_config.disabled_mcp_servers = settings.disabled_mcp_servers.clone();
+        
         Self {
-            agent: Arc::new(Agent::new(AgentConfig::default())),
+            agent: Arc::new(Agent::new(agent_config)),
             engine: Arc::new(Mutex::new(LlamaEngine::new())),
             current_conversation: Signal::new(None),
             conversations: Signal::new(Vec::new()),
-            settings: Signal::new(load_settings()),
+            settings: Signal::new(settings),
             model_state: Signal::new(ModelState::NotLoaded),
             stop_signal: Arc::new(AtomicBool::new(false)),
         }

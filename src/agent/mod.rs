@@ -9,12 +9,15 @@
 
 pub mod permissions;
 pub mod tools;
+pub mod skills;
 pub mod runner;
 pub mod loop_runner;
 pub mod planning;
 pub mod prompts;
+pub mod mcp_config;
 
 use std::sync::Arc;
+use skills::{SkillRegistry, loader::SkillLoader};
 
 pub use permissions::{
     PermissionLevel, PermissionManager, PermissionRequest, PermissionResult,
@@ -24,10 +27,10 @@ pub use tools::{Tool, ToolRegistry, ToolResult, ToolError, ToolInfo};
 pub use tools::exa::{ExaSearchTool, ExaSearchConfig, create_exa_tools};
 pub use tools::mcp_client::{McpServerConfig, McpTransport, McpServerManager};
 pub use tools::mcp_presets::{McpPreset, McpCategory, get_all_presets};
-pub use runner::{ToolCall, extract_tool_call, build_tool_instructions, format_tool_result_for_system, tool_permission_level};
+pub use runner::{ToolCall, extract_tool_call, build_tool_instructions, format_tool_result_for_system};
 pub use loop_runner::{AgentLoop, AgentLoopConfig, AgentState, AgentContext, AgentEvent, IterationResult};
 pub use planning::{TaskPlan, Task, TaskStatus, TaskPriority, PlanManager};
-pub use prompts::{build_agent_system_prompt, build_tool_instructions_advanced};
+pub use prompts::{build_agent_system_prompt, build_tool_instructions_advanced, build_context_compression_prompt};
 
 /// Agent configuration
 #[derive(Clone, Debug)]
@@ -62,6 +65,8 @@ pub struct AgentConfig {
     pub loop_config: AgentLoopConfig,
     /// MCP server configurations
     pub mcp_servers: Vec<McpServerConfig>,
+    /// List of disabled MCP server IDs
+    pub disabled_mcp_servers: Vec<String>,
 }
 
 impl Default for AgentConfig {
@@ -82,6 +87,7 @@ impl Default for AgentConfig {
             tool_timeout_secs: 120,
             loop_config: AgentLoopConfig::default(),
             mcp_servers: Vec::new(),
+            disabled_mcp_servers: Vec::new(),
         }
     }
 }
@@ -92,18 +98,21 @@ pub struct Agent {
     pub tool_registry: Arc<ToolRegistry>,
     pub permission_manager: Arc<PermissionManager>,
     pub plan_manager: PlanManager,
+    pub skill_registry: Arc<SkillRegistry>,
 }
 
 impl Agent {
     pub fn new(config: AgentConfig) -> Self {
         let tool_registry = Arc::new(ToolRegistry::new());
         let permission_manager = Arc::new(PermissionManager::new(config.default_permission));
+        let skill_registry = Arc::new(SkillRegistry::new());
         
         Self {
             config,
             tool_registry,
             permission_manager,
             plan_manager: PlanManager::new(),
+            skill_registry,
         }
     }
     
@@ -116,6 +125,9 @@ impl Agent {
         use tools::web;
         use tools::dev;
         use tools::system;
+        use tools::skill_create;
+        use tools::skill_invoke;
+        use tools::skill_list;
         
         tracing::info!("Initializing agent tools...");
         
@@ -124,7 +136,14 @@ impl Agent {
         // ============================================================
         self.tool_registry.register(Arc::new(builtins::ThinkTool)).await;
         self.tool_registry.register(Arc::new(builtins::TodoWriteTool)).await;
-        tracing::info!("Core tools registered (think, todo_write)");
+        self.tool_registry.register(Arc::new(skill_create::SkillCreateTool)).await;
+        
+        // ============================================================
+        // Skill tools
+        // ============================================================
+        self.tool_registry.register(Arc::new(skill_invoke::SkillInvokeTool)).await;
+        self.tool_registry.register(Arc::new(skill_list::SkillListTool)).await;
+        tracing::info!("Core tools registered (think, todo_write, skill_create, skill_invoke, skill_list)");
         
         // ============================================================
         // Web search tools (Exa)
@@ -194,12 +213,43 @@ impl Agent {
         }
         
         // ============================================================
-        // Web fetch/download tools
+        // MCP servers (dynamic tools from external servers)
         // ============================================================
-        if self.config.enable_web_fetch {
-            self.tool_registry.register(Arc::new(web::WebFetchTool)).await;
-            self.tool_registry.register(Arc::new(web::WebDownloadTool)).await;
-            tracing::info!("Web tools registered (web_fetch, web_download)");
+        
+        // Register management tools
+        self.tool_registry.register(Arc::new(tools::mcp_management::McpAddServerTool)).await;
+        self.tool_registry.register(Arc::new(tools::mcp_management::McpListServersTool)).await;
+        self.tool_registry.register(Arc::new(tools::mcp_management::McpRemoveServerTool)).await;
+        tracing::info!("MCP management tools registered (mcp_add_server, mcp_list_servers, mcp_remove_server)");
+
+        // Load effective config (presets + global + local)
+        let mut mcp_configs = mcp_config::load_effective_config().await;
+        
+        // Add programmatically configured servers (overriding file configs if same ID)
+        for config in &self.config.mcp_servers {
+            if let Some(pos) = mcp_configs.iter().position(|c| c.id == config.id) {
+                mcp_configs[pos] = config.clone();
+            } else {
+                mcp_configs.push(config.clone());
+            }
+        }
+
+        // Filter out disabled servers
+        mcp_configs.retain(|c| !self.config.disabled_mcp_servers.contains(&c.id));
+
+        if !mcp_configs.is_empty() {
+            let mut manager = McpServerManager::new();
+            for server_config in mcp_configs {
+                manager.add_server(server_config);
+            }
+            let mcp_tools = manager.start_all().await;
+            let mcp_count = mcp_tools.len();
+            for tool in mcp_tools {
+                self.tool_registry.register(tool).await;
+            }
+            if mcp_count > 0 {
+                tracing::info!("{} MCP tool(s) registered from external servers", mcp_count);
+            }
         }
         
         // ============================================================
@@ -226,22 +276,26 @@ impl Agent {
         }
         
         // ============================================================
-        // MCP servers (dynamic tools from external servers)
+        // PDF tools
         // ============================================================
-        if !self.config.mcp_servers.is_empty() {
-            let mut manager = McpServerManager::new();
-            for server_config in &self.config.mcp_servers {
-                manager.add_server(server_config.clone());
-            }
-            let mcp_tools = manager.start_all().await;
-            let mcp_count = mcp_tools.len();
-            for tool in mcp_tools {
-                self.tool_registry.register(tool).await;
-            }
-            if mcp_count > 0 {
-                tracing::info!("{} MCP tool(s) registered from external servers", mcp_count);
-            }
+        use tools::pdf;
+        self.tool_registry.register(Arc::new(pdf::PdfReadTool)).await;
+        self.tool_registry.register(Arc::new(pdf::PdfCreateTool)).await;
+        self.tool_registry.register(Arc::new(pdf::PdfAddPageTool)).await;
+        self.tool_registry.register(Arc::new(pdf::PdfMergeTool)).await;
+        tracing::info!("PDF tools registered (pdf_read, pdf_create, pdf_add_page, pdf_merge)");
+        
+        // ============================================================
+        // Skills (loaded from .localm/skills)
+        // ============================================================
+        tracing::info!("Loading skills...");
+        let skills = SkillLoader::load_all().await;
+        let skill_count = skills.len();
+        for skill in skills {
+            self.skill_registry.register(skill).await;
         }
+        self.skill_registry.register_as_tools(&self.tool_registry).await;
+        tracing::info!("{} skills loaded and registered as tools", skill_count);
         
         let total = self.tool_registry.count();
         tracing::info!("Agent initialized with {} total tools", total);
@@ -279,7 +333,10 @@ pub fn get_tool_permission(tool_name: &str) -> PermissionLevel {
         "file_read" | "file_list" | "grep" | "glob" | "think" | "todo_write"
         | "file_info" | "file_search" | "diff" | "wc" | "tree"
         | "process_list" | "environment" | "system_info" | "which"
-        | "git_status" | "git_diff" | "git_log" | "git_branch" => {
+        | "git_status" | "git_diff" | "git_log" | "git_branch"
+        | "pdf_read"
+        | "skill_list" | "skill_invoke" 
+        | "mcp_list_servers" => {
             PermissionLevel::ReadOnly
         }
         // Network tools (external requests)
@@ -291,7 +348,10 @@ pub fn get_tool_permission(tool_name: &str) -> PermissionLevel {
         // Write tools (file modifications)
         "file_write" | "file_edit" | "file_create" | "file_delete" 
         | "file_move" | "file_copy" | "directory_create"
-        | "find_replace" | "patch" => {
+        | "find_replace" | "patch"
+        | "pdf_create" | "pdf_add_page" | "pdf_merge"
+        | "skill_create" 
+        | "mcp_add_server" | "mcp_remove_server" => {
             PermissionLevel::WriteFile
         }
         // Safe command execution
@@ -345,6 +405,9 @@ mod tests {
         assert_eq!(get_tool_permission("command"), PermissionLevel::ExecuteSafe);
         assert_eq!(get_tool_permission("bash"), PermissionLevel::ExecuteUnsafe);
         assert_eq!(get_tool_permission("git_commit"), PermissionLevel::ExecuteUnsafe);
+        // Skill tools
+        assert_eq!(get_tool_permission("skill_invoke"), PermissionLevel::ReadOnly);
+        assert_eq!(get_tool_permission("skill_list"), PermissionLevel::ReadOnly);
         // MCP
         assert_eq!(get_tool_permission("mcp_github_list_repos"), PermissionLevel::Network);
     }

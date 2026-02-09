@@ -331,6 +331,8 @@ struct WorkerState {
     ctx: Option<LlamaContext<'static>>,
     /// Current context size
     ctx_n_ctx: u32,
+    /// Current batch size (needed to verify reuse compatibility)
+    ctx_n_batch: u32,
     /// Optimal thread count (cached)
     n_threads: i32,
 }
@@ -342,6 +344,7 @@ impl WorkerState {
             model: None,
             ctx: None,
             ctx_n_ctx: 0,
+            ctx_n_batch: 0,
             n_threads: get_optimal_threads(),
         }
     }
@@ -377,6 +380,7 @@ fn worker_thread_main(command_rx: Receiver<WorkerCommand>) {
                 // Drop existing context FIRST (before model)
                 state.ctx = None;
                 state.ctx_n_ctx = 0;
+                state.ctx_n_batch = 0;
                 state.model = None;
                 
                 match load_model_internal(&state.backend, &path, gpu_layers) {
@@ -393,6 +397,7 @@ fn worker_thread_main(command_rx: Receiver<WorkerCommand>) {
                 // Drop context FIRST, then model
                 state.ctx = None;
                 state.ctx_n_ctx = 0;
+                state.ctx_n_batch = 0;
                 state.model = None;
                 tracing::info!("Model and context unloaded");
             }
@@ -529,17 +534,27 @@ fn run_generation_persistent(
     );
 
     // === THE KEY OPTIMIZATION ===
-    // Reuse existing context if it's big enough, otherwise create a new one.
+    // Reuse existing context if it's big enough AND has sufficient batch size.
     // Creating a context is SLOW (allocates KV cache in VRAM, 2-5 seconds).
     // Reusing one is INSTANT.
     
+    // Calculate what batch size we need for this prompt
+    let needed_batch = calculate_optimal_batch(n_ctx, prompt_len);
+    
     let need_new_ctx = match &state.ctx {
-        Some(_) if state.ctx_n_ctx >= n_ctx => {
+        Some(_) if state.ctx_n_ctx >= n_ctx && state.ctx_n_batch >= needed_batch => {
             tracing::info!(
-                "REUSING context ({} >= {}): ~0ms vs 2-5s for new context",
-                state.ctx_n_ctx, n_ctx
+                "REUSING context (ctx: {} >= {}, batch: {} >= {}): ~0ms vs 2-5s for new context",
+                state.ctx_n_ctx, n_ctx, state.ctx_n_batch, needed_batch
             );
             false
+        }
+        Some(_) if state.ctx_n_ctx >= n_ctx => {
+            tracing::info!(
+                "Batch too small ({} < {}), recreating context...",
+                state.ctx_n_batch, needed_batch
+            );
+            true
         }
         Some(_) => {
             tracing::info!(
@@ -558,6 +573,7 @@ fn run_generation_persistent(
         // Drop old context first to free VRAM
         state.ctx = None;
         state.ctx_n_ctx = 0;
+        state.ctx_n_batch = 0;
         
         let n_threads = state.n_threads;
         let n_batch = calculate_optimal_batch(n_ctx, prompt_len);
@@ -577,6 +593,7 @@ fn run_generation_persistent(
         
         state.ctx = Some(ctx);
         state.ctx_n_ctx = n_ctx;
+        state.ctx_n_batch = n_batch;
         
         tracing::info!(
             "Context created in {:?}: {}K ctx, {} batch, {} threads",
@@ -780,6 +797,7 @@ fn run_inference(
     let mut n_decoded = prompt_tokens.len() as i32;
     let mut tokens_generated = 0u32;
     let mut utf8_buffer: Vec<u8> = Vec::with_capacity(32);
+    let mut hit_eos = false;  // Track if we stopped due to EOS
 
     let gen_start = std::time::Instant::now();
     
@@ -793,6 +811,7 @@ fn run_inference(
 
         if model.is_eog_token(new_token) {
             flush_utf8_buffer(&mut utf8_buffer, tx);
+            hit_eos = true;
             break;
         }
 
@@ -825,14 +844,24 @@ fn run_inference(
     let total_time = inference_start.elapsed();
     if tokens_generated > 0 {
         tracing::info!(
-            "Gen: {} tokens in {:?} ({:.1} t/s), total: {:?}",
+            "Gen: {} tokens in {:?} ({:.1} t/s), total: {:?}{}",
             tokens_generated, gen_time,
             tokens_generated as f64 / gen_time.as_secs_f64(),
-            total_time
+            total_time,
+            if !hit_eos { " [TRUNCATED]" } else { "" }
         );
     }
 
-    let _ = tx.send(StreamToken::Done);
+    // Send appropriate completion signal
+    if hit_eos || stop_signal.load(Ordering::Relaxed) {
+        let _ = tx.send(StreamToken::Done);
+    } else {
+        // Hit max_tokens without EOS - response is truncated
+        let _ = tx.send(StreamToken::Truncated {
+            tokens_generated,
+            max_tokens: params.max_tokens,
+        });
+    }
     Ok(())
 }
 

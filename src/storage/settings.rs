@@ -48,6 +48,9 @@ pub struct AppSettings {
     /// List of tool names that are auto-approved (allowlist)
     #[serde(default)]
     pub tool_allowlist: Vec<String>,
+    /// List of disabled MCP server IDs
+    #[serde(default)]
+    pub disabled_mcp_servers: Vec<String>,
 }
 
 fn default_auto_load() -> bool {
@@ -74,7 +77,11 @@ pub fn default_system_prompt_for_lang(lang: &str) -> String {
     let home = std::env::var("USERPROFILE")
         .or_else(|_| std::env::var("HOME"))
         .unwrap_or_else(|_| "unknown".to_string());
-    let sep = if std::env::consts::OS == "windows" { "\\" } else { "/" };
+    let sep = if std::env::consts::OS == "windows" {
+        "\\"
+    } else {
+        "/"
+    };
     let cmd_info = if std::env::consts::OS == "windows" {
         "\n- This is Windows. Use PowerShell commands: dir, Get-ChildItem, Get-Content, etc.\n- Do NOT use Unix commands (ls, cat, grep). They won't work."
     } else {
@@ -161,8 +168,8 @@ impl Default for AppSettings {
             temperature: 0.7,
             top_p: 0.9,
             top_k: 40,
-            max_tokens: 4096,     // 4K output - OK with 16K context
-            context_size: 16384,  // 16K context - user confirmed 36 tok/s in LM Studio with 16K on 8GB VRAM
+            max_tokens: 4096,    // 4K output - OK with 16K context
+            context_size: 16384, // 16K context - user confirmed 36 tok/s in LM Studio with 16K on 8GB VRAM
             system_prompt: default_system_prompt(),
             gpu_layers: 99, // Offload all layers to GPU by default
             models_directory: get_data_dir()
@@ -177,6 +184,7 @@ impl Default for AppSettings {
             language: "fr".to_string(),
             auto_approve_all_tools: false,
             tool_allowlist: Vec::new(),
+            disabled_mcp_servers: Vec::new(),
         }
     }
 }
@@ -189,7 +197,7 @@ impl AppSettings {
     pub fn validate(&mut self) {
         self.temperature = self.temperature.clamp(0.0, 2.0);
         self.top_p = self.top_p.clamp(0.0, 1.0);
-        
+
         if self.top_k == 0 {
             self.top_k = 40;
         }
@@ -212,11 +220,12 @@ impl AppSettings {
         if self.context_size > max_safe_context {
             tracing::warn!(
                 "Context size {} too large for available VRAM, capping to {}",
-                self.context_size, max_safe_context
+                self.context_size,
+                max_safe_context
             );
             self.context_size = max_safe_context;
         }
-        
+
         // Cap max_tokens to context_size (can't generate more than context allows)
         if self.max_tokens > self.context_size {
             self.max_tokens = self.context_size / 2;

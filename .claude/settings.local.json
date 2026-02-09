@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc -l \"C:\\\\Users\\\\crist\\\\Desktop\\\\LocaLM\\\\src\"/**/*.rs)",
+      "Bash(find:*)",
+      "Bash(cargo check:*)"
+    ]
+  }
+}

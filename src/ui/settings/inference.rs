@@ -1,6 +1,6 @@
+use crate::agent::{ExaSearchConfig, ExaSearchTool};
 use crate::app::AppState;
 use crate::storage::settings::save_settings;
-use crate::agent::{ExaSearchConfig, ExaSearchTool};
 use dioxus::prelude::*;
 use std::sync::Arc;
 

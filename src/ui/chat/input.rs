@@ -1,6 +1,8 @@
 //! Chat input component - Premium glass style with send button inside
 
 use crate::app::AppState;
+use crate::agent::skills::loader::SkillLoader;
+use crate::agent::skills::Skill;
 use dioxus::prelude::*;
 
 /// Estimate how many rows the textarea needs based on content
@@ -21,10 +23,57 @@ pub fn ChatInput(
     is_generating: bool,
 ) -> Element {
     let mut text = use_signal(|| String::new());
+    let mut skills = use_signal(Vec::new);
+    let mut filtered_skills = use_signal(Vec::<Skill>::new);
+    let mut autocomplete_open = use_signal(|| false);
+    let mut selected_index = use_signal(|| 0);
+    
     let app_state = use_context::<AppState>();
     let is_en = app_state.settings.read().language == "en";
 
+    // Load skills on mount
+    use_effect(move || {
+        spawn(async move {
+            let loaded = SkillLoader::load_all().await;
+            skills.set(loaded);
+        });
+    });
+
     let handle_keydown = move |evt: KeyboardEvent| {
+        // Autocomplete navigation
+        if autocomplete_open() {
+            let skills_len = filtered_skills.read().len();
+            if skills_len > 0 {
+                match evt.key() {
+                    Key::ArrowUp => {
+                        evt.prevent_default();
+                        let idx = selected_index();
+                        selected_index.set(if idx == 0 { skills_len - 1 } else { idx - 1 });
+                        return;
+                    }
+                    Key::ArrowDown => {
+                        evt.prevent_default();
+                        selected_index.set((selected_index() + 1) % skills_len);
+                        return;
+                    }
+                    Key::Enter => {
+                        evt.prevent_default();
+                        let skill = filtered_skills.read()[selected_index()].clone();
+                        let name = skill.name.trim_start_matches("skill_");
+                        text.set(format!("/{} ", name));
+                        autocomplete_open.set(false);
+                        return;
+                    }
+                    Key::Escape => {
+                        evt.prevent_default();
+                        autocomplete_open.set(false);
+                        return;
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         if evt.key() == Key::Escape && is_generating {
             on_stop.call(());
         } else if evt.key() == Key::Enter && !evt.modifiers().contains(Modifiers::SHIFT) {
@@ -32,7 +81,36 @@ pub fn ChatInput(
             if !is_generating && !text().trim().is_empty() {
                 on_send.call(text());
                 text.set(String::new());
+                autocomplete_open.set(false);
             }
+        }
+    };
+
+    let handle_input = move |evt: FormEvent| {
+        let val = evt.value();
+        text.set(val.clone());
+
+        // Check for autocomplete trigger
+        if val.starts_with('/') && !val.contains(' ') && !val.contains('\n') {
+            let query = val.trim_start_matches('/');
+            let all = skills.read();
+            let matches: Vec<Skill> = all.iter()
+                .filter(|s| {
+                    let name = s.name.trim_start_matches("skill_");
+                    name.to_lowercase().contains(&query.to_lowercase())
+                })
+                .cloned()
+                .collect();
+            
+            if !matches.is_empty() {
+                filtered_skills.set(matches);
+                selected_index.set(0);
+                autocomplete_open.set(true);
+            } else {
+                autocomplete_open.set(false);
+            }
+        } else {
+            autocomplete_open.set(false);
         }
     };
 
@@ -86,6 +164,65 @@ pub fn ChatInput(
             div {
                 class: "relative max-w-3xl mx-auto",
 
+                // Autocomplete Dropdown
+                if autocomplete_open() {
+                    div {
+                        class: "absolute left-0 bottom-full mb-2 w-full rounded-xl overflow-hidden z-50 glass-md animate-fade-in-up",
+                        style: "max-height: 240px; border: 1px solid var(--border-medium); box-shadow: 0 12px 32px -4px rgba(30,25,20,0.35);",
+                        
+                        // Header
+                        div {
+                            class: "px-3 py-2 border-b border-[var(--border-subtle)] bg-white/5",
+                            span {
+                                class: "text-[10px] uppercase tracking-widest text-[var(--text-tertiary)] font-semibold",
+                                if is_en { "Available Skills" } else { "Skills disponibles" }
+                            }
+                        }
+                        
+                        // List
+                        div {
+                            class: "overflow-y-auto custom-scrollbar",
+                            style: "max-height: 200px;",
+                            
+                            for (i, skill) in filtered_skills.read().iter().enumerate() {
+                                {
+                                    let is_selected = i == selected_index();
+                                    let name = skill.name.trim_start_matches("skill_").to_string();
+                                    let desc = if skill.description.len() > 60 {
+                                        format!("{}...", &skill.description[..60])
+                                    } else {
+                                        skill.description.clone()
+                                    };
+                                    
+                                    rsx! {
+                                        button {
+                                            onclick: move |_| {
+                                                text.set(format!("/{} ", name));
+                                                autocomplete_open.set(false);
+                                            },
+                                            class: "w-full text-left px-3 py-2 transition-colors flex flex-col gap-0.5",
+                                            style: if is_selected {
+                                                "background: var(--accent-soft); color: var(--accent-primary);"
+                                            } else {
+                                                "color: var(--text-primary); hover:bg-white/5;"
+                                            },
+                                            
+                                            div {
+                                                class: "flex items-center justify-between",
+                                                span { class: "font-semibold text-sm", "/{name}" }
+                                            }
+                                            span {
+                                                class: "text-xs opacity-70 truncate",
+                                                "{desc}"
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+
                 // Glass input container
                 div {
                     class: "{container_class}",
@@ -97,7 +234,7 @@ pub fn ChatInput(
                         style: "{textarea_style}",
                         placeholder: "{placeholder}",
                         value: "{text}",
-                        oninput: move |evt| text.set(evt.value()),
+                        oninput: handle_input,
                         onkeydown: handle_keydown,
                         disabled: is_generating,
                         rows: "{rows_str}",

@@ -7,8 +7,10 @@
 pub enum StreamToken {
     /// A generated token string
     Token(String),
-    /// Generation completed successfully
+    /// Generation completed successfully (EOS token reached)
     Done,
+    /// Generation hit max_tokens limit without EOS (response may be incomplete)
+    Truncated { tokens_generated: u32, max_tokens: u32 },
     /// An error occurred during generation
     Error(String),
 }
@@ -19,9 +21,14 @@ impl StreamToken {
         matches!(self, StreamToken::Token(_))
     }
 
-    /// Returns true if generation is complete
+    /// Returns true if generation is complete (with EOS)
     pub fn is_done(&self) -> bool {
         matches!(self, StreamToken::Done)
+    }
+
+    /// Returns true if generation was truncated (hit max_tokens)
+    pub fn is_truncated(&self) -> bool {
+        matches!(self, StreamToken::Truncated { .. })
     }
 
     /// Returns true if an error occurred

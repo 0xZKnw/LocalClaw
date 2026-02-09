@@ -5,45 +5,11 @@
 use serde_json::Value;
 
 use crate::agent::tools::{ToolInfo, ToolResult};
-use crate::agent::permissions::PermissionLevel;
 
 #[derive(Clone, Debug)]
 pub struct ToolCall {
     pub tool: String,
     pub params: Value,
-}
-
-pub fn tool_permission_level(tool_name: &str) -> PermissionLevel {
-    match tool_name {
-        // Read-only tools
-        "file_read" | "file_list" | "grep" | "glob" | "think" | "todo_write"
-        | "file_info" | "file_search" | "diff" | "wc" | "tree"
-        | "process_list" | "environment" | "system_info" | "which"
-        | "git_status" | "git_diff" | "git_log" | "git_branch" => {
-            PermissionLevel::ReadOnly
-        }
-        // Network tools
-        "web_search" | "code_search" | "company_research"
-        | "deep_research_start" | "deep_research_check" | "web_crawl"
-        | "web_fetch" | "web_download" => {
-            PermissionLevel::Network
-        }
-        // File write tools
-        "file_write" | "file_edit" | "file_create" | "file_delete"
-        | "file_move" | "file_copy" | "directory_create"
-        | "find_replace" | "patch" => {
-            PermissionLevel::WriteFile
-        }
-        // Safe command execution
-        "command" => PermissionLevel::ExecuteSafe,
-        // Unsafe execution
-        "bash" | "bash_background" | "git_commit" | "git_stash" => {
-            PermissionLevel::ExecuteUnsafe
-        }
-        // MCP tools
-        name if name.starts_with("mcp_") => PermissionLevel::Network,
-        _ => PermissionLevel::ReadOnly,
-    }
 }
 
 pub fn build_tool_instructions(tools: &[ToolInfo]) -> String {
@@ -61,8 +27,8 @@ Available tools:\n",
     );
 
     for tool in tools {
-        let schema = serde_json::to_string(&tool.parameters_schema)
-            .unwrap_or_else(|_| "{}".to_string());
+        let schema =
+            serde_json::to_string(&tool.parameters_schema).unwrap_or_else(|_| "{}".to_string());
         out.push_str("- ");
         out.push_str(&tool.name);
         out.push_str(": ");

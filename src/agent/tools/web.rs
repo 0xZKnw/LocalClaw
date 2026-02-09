@@ -129,12 +129,13 @@ impl Tool for WebFetchTool {
             text
         };
 
-        // Truncate if needed
+        // Truncate if needed (safe char-boundary slicing)
         let display = if processed.len() > max_length {
+            let safe = crate::truncate_str(&processed, max_length);
             format!(
-                "{}...\n\n[Tronqué: {} caractères sur {}]",
-                &processed[..max_length],
-                max_length,
+                "{}...\n\n[Truncated: {} chars out of {}]",
+                safe,
+                safe.len(),
                 processed.len()
             )
         } else {

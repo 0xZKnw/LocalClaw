@@ -146,9 +146,10 @@ impl Tool for GitDiffTool {
         args.retain(|a| *a != "--stat");
         let (diff_out, _, _) = run_git(&args, wd).await?;
 
-        // Truncate if too long
+        // Truncate if too long (safe char-boundary slicing)
         let diff_display = if diff_out.len() > 50000 {
-            format!("{}...\n[tronqué, diff trop long]", &diff_out[..50000])
+            let safe = crate::truncate_str(&diff_out, 50000);
+            format!("{}...\n[truncated, diff too long]", safe)
         } else {
             diff_out
         };

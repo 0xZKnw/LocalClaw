@@ -118,11 +118,22 @@ pub mod dev;
 /// System tools (process list, environment, system info, which, tree)
 pub mod system;
 
+/// PDF tools (read, create, add page, merge)
+pub mod pdf;
+
+/// Skill creation tool
+pub mod skill_create;
+pub mod skill_invoke;
+pub mod skill_list;
+
 /// Generic MCP client (stdio + HTTP transports)
 pub mod mcp_client;
 
 /// MCP server presets for popular services
 pub mod mcp_presets;
+
+/// MCP management tools
+pub mod mcp_management;
 
 /// Builtin tools module
 pub mod builtins {
