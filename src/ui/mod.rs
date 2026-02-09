@@ -1,4 +1,4 @@
-//! UI components for LocaLM
+//! UI components for LocalClaw
 //!
 //! This module contains all user interface components built with Dioxus.
 

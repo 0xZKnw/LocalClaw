@@ -112,7 +112,7 @@ impl ExaMcpClient {
         let params = serde_json::json!({
             "protocolVersion": "2024-11-05",
             "capabilities": { "tools": {} },
-            "clientInfo": { "name": "localm", "version": "0.3.0" }
+            "clientInfo": { "name": "localclaw", "version": "0.3.0" }
         });
 
         let _ = self.mcp_request("initialize", params).await?;

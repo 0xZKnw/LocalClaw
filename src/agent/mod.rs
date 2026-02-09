@@ -295,7 +295,7 @@ impl Agent {
         tracing::info!("OpenRouter tool registered (ai_consult)");
         
         // ============================================================
-        // Skills (loaded from .localm/skills)
+        // Skills (loaded from .localclaw/skills)
         // ============================================================
         tracing::info!("Loading skills...");
         let skills = SkillLoader::load_all().await;

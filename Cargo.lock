@@ -2802,7 +2802,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "localm"
+name = "localclaw"
 version = "0.2.0"
 dependencies = [
  "async-trait",

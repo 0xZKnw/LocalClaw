@@ -192,7 +192,7 @@ pub async fn download_model(
     
     let response = client
         .get(&download_url)
-        .header("User-Agent", "LocaLM/0.2.0")
+        .header("User-Agent", "LocalClaw/0.2.0")
         .send()
         .await
         .map_err(|e| format!("Download failed: {}", e))?;

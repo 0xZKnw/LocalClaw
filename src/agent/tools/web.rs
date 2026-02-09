@@ -66,7 +66,7 @@ impl Tool for WebFetchTool {
 
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
-            .user_agent("LocaLM/0.2.0")
+            .user_agent("LocalClaw/0.2.0")
             .build()
             .map_err(|e| ToolError::ExecutionFailed(format!("Impossible de créer le client HTTP: {}", e)))?;
 
@@ -200,7 +200,7 @@ impl Tool for WebDownloadTool {
 
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(120))
-            .user_agent("LocaLM/0.2.0")
+            .user_agent("LocalClaw/0.2.0")
             .build()
             .map_err(|e| ToolError::ExecutionFailed(format!("Client HTTP: {}", e)))?;
 

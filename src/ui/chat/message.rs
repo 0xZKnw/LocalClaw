@@ -1067,10 +1067,10 @@ pub fn MessageBubble(message: Message) -> Element {
         rsx! {
             div { class: "message-layout animate-fade-in-up",
                 div { class: "flex items-start gap-3 mb-4",
-                    // LocaLM avatar — small circle with gradient
+                    // LocalClaw avatar — small circle with gradient
                     div {
                         class: "flex-shrink-0 w-6 h-6 rounded-full flex items-center justify-center mt-1",
-                        style: "background: var(--accent-primary); box-shadow: 0 4px 12px -4px rgba(42,107,124,0.25);",
+                        style: "background: var(--accent-primary); box-shadow: 0 4px 12px -4px var(--accent-glow);",
                         svg {
                             class: "w-3 h-3",
                             style: "color: #F2EDE7;",

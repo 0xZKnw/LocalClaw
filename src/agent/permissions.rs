@@ -1,4 +1,4 @@
-//! Permission system for LocaLM agents.
+//! Permission system for LocalClaw agents.
 //!
 //! Provides permission levels, request tracking, and UI notification signals
 //! for approval workflows.

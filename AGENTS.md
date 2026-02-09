@@ -1,4 +1,4 @@
-# LocaLM Knowledge Base (AGENTS.md)
+# LocalClaw Knowledge Base (AGENTS.md)
 
 ## OVERVIEW
 Native desktop application for local LLM inference and agentic workflows.

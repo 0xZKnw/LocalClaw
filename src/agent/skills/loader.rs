@@ -17,9 +17,9 @@ impl SkillLoader {
             }
         }
 
-        // 2. Load project-local skills (.localm/skills)
-        // We assume we are running in the project root
-        let local_dir = PathBuf::from(".localm").join("skills");
+    // 2. Load project-local skills (.localclaw/skills)
+    // We assume we are running in the project root
+    let local_dir = PathBuf::from(".localclaw").join("skills");
         if let Ok(mut local_skills) = Self::load_from_dir(&local_dir).await {
             skills.append(&mut local_skills);
         }
@@ -71,33 +71,11 @@ impl SkillLoader {
     /// Get the global skills directory based on OS
     fn get_global_skills_dir() -> Option<PathBuf> {
         // Use directories crate to find standard data dir
-        if let Some(proj_dirs) = directories::ProjectDirs::from("com", "LocaLM", "LocaLM") {
+        if let Some(proj_dirs) = directories::ProjectDirs::from("com", "LocalClaw", "LocalClaw") {
             let _data_dir = proj_dirs.data_dir();
-            // Windows: %APPDATA%/LocaLM/skills
-            // Linux: ~/.local/share/LocaLM/skills
-            // macOS: ~/Library/Application Support/LocaLM/skills
-            // Note: ProjectDirs appends "LocaLM" to the base data dir already if we use the constructor above properly?
-            // ProjectDirs::from("com", "LocaLM", "LocaLM") -> 
-            // Win: AppData/Roaming/LocaLM/LocaLM/data ?? No.
-            // Let's check docs or behavior.
-            // Actually, "LocaLM" is the app name.
-            // On Windows: Roaming/LocaLM
-            // The prompt says: %APPDATA%/LocaLM/skills/
-            
-            // If I use ProjectDirs::from("", "", "LocaLM"), it might be cleaner.
-            // Let's rely on what `ProjectDirs` gives us, usually standard.
-            
-            // Wait, the prompt specified specific paths.
-            // Windows: %APPDATA%/LocaLM/skills/
-            
-            // Let's construct it manually to match requirements if ProjectDirs varies.
-            // Actually, `directories` is standard. 
-            // `directories::ProjectDirs::from("", "", "LocaLM")`
-            // Win: C:\Users\User\AppData\Roaming\LocaLM
-            // Mac: /Users/User/Library/Application Support/LocaLM
-            // Linux: /home/user/.local/share/LocaLM
-            
-            // That matches the requirement prefixes.
+            // Windows: %APPDATA%/LocalClaw/skills
+            // Linux: ~/.local/share/LocalClaw/skills
+            // macOS: ~/Library/Application Support/LocalClaw/skills
             return Some(proj_dirs.data_dir().join("skills"));
         }
         None

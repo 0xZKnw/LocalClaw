@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-LocaLM is a native desktop application for running LLMs locally without cloud dependencies. Built in Rust with Dioxus (WebView-based desktop UI) and llama.cpp for inference. Supports 30+ agentic tools, GPU acceleration (CUDA/Vulkan), and bilingual UI (French/English).
+LocalClaw is a native desktop application for running LLMs locally without cloud dependencies. Built in Rust with Dioxus (WebView-based desktop UI) and llama.cpp for inference. Supports 30+ agentic tools, GPU acceleration (CUDA/Vulkan), and bilingual UI (French/English).
 
 ## Build & Run Commands
 
@@ -75,9 +75,9 @@ The `LlamaEngine` uses a dedicated OS thread (not a Tokio task) because llama-cp
 ## Storage Locations
 
 Data is stored in platform-specific directories via the `directories` crate:
-- **Windows:** `%APPDATA%\LocaLM\LocaLM\`
-- **macOS:** `~/Library/Application Support/com.LocaLM.LocaLM/`
-- **Linux:** `~/.local/share/LocaLM/`
+- **Windows:** `%APPDATA%\LocalClaw\LocalClaw\`
+- **macOS:** `~/Library/Application Support/com.LocalClaw.LocalClaw/`
+- **Linux:** `~/.local/share/LocalClaw/`
 
 Subdirectories: `conversations/`, `models/`, `settings.json`.
 

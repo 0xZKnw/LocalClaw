@@ -1,7 +1,7 @@
 # Agent Module (src/agent/)
 
 ## OVERVIEW
-Core orchestration engine for LocaLM's agentic capabilities. Implements a multi-step reasoning loop, task planning, and a secure tool-calling system with 30+ built-in tools.
+Core orchestration engine for LocalClaw's agentic capabilities. Implements a multi-step reasoning loop, task planning, and a secure tool-calling system with 30+ built-in tools.
 
 ## STRUCTURE
 - `mod.rs`: Agent configuration, registry initialization, and permission mapping.

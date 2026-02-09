@@ -149,7 +149,7 @@ impl StdioMcpClient {
             "params": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": { "tools": {} },
-                "clientInfo": { "name": "localm", "version": "0.2.0" }
+                "clientInfo": { "name": "localclaw", "version": "0.2.0" }
             }
         });
 
@@ -360,7 +360,7 @@ impl HttpMcpClient {
             "params": {
                 "protocolVersion": "2024-11-05",
                 "capabilities": { "tools": {} },
-                "clientInfo": { "name": "localm", "version": "0.2.0" }
+                "clientInfo": { "name": "localclaw", "version": "0.2.0" }
             }
         });
 

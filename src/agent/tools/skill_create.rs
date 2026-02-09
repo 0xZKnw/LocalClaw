@@ -108,7 +108,7 @@ impl Tool for SkillCreateTool {
                 },
                 "is_global": {
                     "type": "boolean",
-                    "description": "If true, save to global skills directory. If false, save to project .localm/skills/",
+                    "description": "If true, save to global skills directory. If false, save to project .localclaw/skills/",
                     "default": false
                 },
                 "disable_auto_invoke": {
@@ -181,7 +181,7 @@ impl Tool for SkillCreateTool {
                 })?
                 .join("skills")
         } else {
-            PathBuf::from(".localm").join("skills")
+            PathBuf::from(".localclaw").join("skills")
         };
 
         let skill_dir = base_dir.join(name);

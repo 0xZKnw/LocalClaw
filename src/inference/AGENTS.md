@@ -1,4 +1,4 @@
-# LocaLM Inference Module (AGENTS.md)
+# LocalClaw Inference Module (AGENTS.md)
 
 ## OVERVIEW
 Core LLM engine wrapping `llama-cpp-2`. Handles model loading, context management, and token streaming. 

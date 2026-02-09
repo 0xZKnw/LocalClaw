@@ -1,5 +1,5 @@
 <p align="center">
-  <h1 align="center">LocaLM</h1>
+  <h1 align="center">LocalClaw</h1>
   <p align="center">
     <strong>Your private AI, 100% local.</strong><br>
     A premium desktop application to run LLMs locally with an agentic tool system, built in Rust.
@@ -14,9 +14,9 @@
 
 ---
 
-## What is LocaLM?
+## What is LocalClaw?
 
-LocaLM is a native desktop application that lets you run large language models **entirely on your machine** — no cloud, no API keys, no data leaving your device. It combines a modern glassmorphism UI with a powerful agentic system that can read/write files, execute commands, search the web, and much more.
+LocalClaw is a native desktop application that lets you run large language models **entirely on your machine** — no cloud, no API keys, no data leaving your device. It combines a modern glassmorphism UI with a powerful agentic system that can read/write files, execute commands, search the web, and much more.
 
 Think of it as your own private Claude or ChatGPT, running offline with full access to your computer.
 
@@ -143,7 +143,7 @@ src/
 
 ## Tools
 
-LocaLM comes with **30+ built-in tools** the AI can use:
+LocalClaw comes with **30+ built-in tools** the AI can use:
 
 | Category | Tools | Permission |
 |----------|-------|------------|

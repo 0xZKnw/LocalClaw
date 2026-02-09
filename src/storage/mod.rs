@@ -26,11 +26,11 @@ pub enum StorageError {
 /// Get the application data directory
 ///
 /// Returns the platform-specific application data directory:
-/// - Windows: `C:\Users\{user}\AppData\Roaming\LocaLM\LocaLM`
-/// - macOS: `/Users/{user}/Library/Application Support/com.LocaLM.LocaLM`
-/// - Linux: `/home/{user}/.local/share/LocaLM`
+/// - Windows: `C:\Users\{user}\AppData\Roaming\LocalClaw\LocalClaw`
+/// - macOS: `/Users/{user}/Library/Application Support/com.LocalClaw.LocalClaw`
+/// - Linux: `/home/{user}/.local/share/LocalClaw`
 pub fn get_data_dir() -> Result<PathBuf, StorageError> {
-    directories::ProjectDirs::from("com", "LocaLM", "LocaLM")
+    directories::ProjectDirs::from("com", "LocalClaw", "LocalClaw")
         .map(|dirs| dirs.data_dir().to_path_buf())
         .ok_or_else(|| StorageError::DataDirError("Could not determine data directory".to_string()))
 }
@@ -66,7 +66,7 @@ mod tests {
         let result = get_data_dir();
         assert!(result.is_ok());
         let path = result.unwrap();
-        assert!(path.to_string_lossy().contains("LocaLM"));
+        assert!(path.to_string_lossy().contains("LocalClaw"));
     }
 
     #[test]

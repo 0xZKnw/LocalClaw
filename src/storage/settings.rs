@@ -107,7 +107,7 @@ pub fn default_system_prompt_for_lang(lang: &str) -> String {
     };
 
     format!(
-        r#"You are LocaLM, a helpful AI assistant running locally on the user's machine.
+        r#"You are LocalClaw, a helpful AI assistant running locally on the user's machine.
 {response_lang}
 
 ## System Environment

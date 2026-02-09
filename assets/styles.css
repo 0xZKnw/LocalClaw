@@ -1,6 +1,6 @@
 /* ============================================================================
-   LocaLM — Organic Premium Design System 2026
-   Warm anthracite, sand, bleu petrole mat
+   LocalClaw — Organic Premium Design System 2026
+   Warm anthracite, sand, rouge vin mat
    ============================================================================ */
 
 @import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
@@ -25,14 +25,14 @@
   --glass-border-hover: rgba(242, 237, 231, 0.13);
   --glass-highlight: rgba(242, 237, 231, 0.05);
 
-  /* Accent — Bleu petrole mat (muted, sophisticated) */
-  --accent-primary: #2A6B7C;
-  --accent-secondary: #3A8899;
-  --accent-tertiary: #3A8899;
-  --accent-gradient: #2A6B7C;
-  --accent-gradient-hover: #3A8899;
-  --accent-glow: rgba(42, 107, 124, 0.25);
-  --accent-soft: rgba(42, 107, 124, 0.12);
+  /* Accent — Rouge vin mat (muted, sophisticated) */
+  --accent-primary: #8B2635;
+  --accent-secondary: #B83A4B;
+  --accent-tertiary: #B83A4B;
+  --accent-gradient: #8B2635;
+  --accent-gradient-hover: #B83A4B;
+  --accent-glow: rgba(139, 38, 53, 0.25);
+  --accent-soft: rgba(139, 38, 53, 0.12);
 
   /* Text — warm ivory/cream (NOT pure white) */
   --text-primary: #F2EDE7;
@@ -68,12 +68,12 @@
   --bg-elevated-80: rgba(49, 46, 41, 0.8);
   --bg-tertiary-30: rgba(39, 36, 32, 0.3);
   --bg-tertiary-50: rgba(39, 36, 32, 0.5);
-  --accent-primary-10: rgba(42, 107, 124, 0.10);
-  --accent-primary-15: rgba(42, 107, 124, 0.15);
-  --accent-primary-20: rgba(42, 107, 124, 0.20);
-  --accent-primary-25: rgba(42, 107, 124, 0.25);
-  --accent-primary-30: rgba(42, 107, 124, 0.30);
-  --accent-primary-40: rgba(42, 107, 124, 0.40);
+  --accent-primary-10: rgba(139, 38, 53, 0.10);
+  --accent-primary-15: rgba(139, 38, 53, 0.15);
+  --accent-primary-20: rgba(139, 38, 53, 0.20);
+  --accent-primary-25: rgba(139, 38, 53, 0.25);
+  --accent-primary-30: rgba(139, 38, 53, 0.30);
+  --accent-primary-40: rgba(139, 38, 53, 0.40);
 
   /* Shadows — warm tones (NOT pure black) */
   --shadow-sm: 0 1px 3px rgba(30, 25, 20, 0.4);
@@ -83,7 +83,7 @@
   --shadow-2xl: 0 32px 64px -16px rgba(30, 25, 20, 0.55);
   --shadow-glow: 0 0 20px -4px var(--accent-glow);
   --shadow-glow-strong: 0 0 40px -4px var(--accent-glow);
-  --shadow-glow-soft: 0 0 60px 0px rgba(42, 107, 124, 0.08);
+  --shadow-glow-soft: 0 0 60px 0px rgba(139, 38, 53, 0.08);
   --shadow-glass: 0 0 0 1px var(--glass-border), 0 8px 32px rgba(30, 25, 20, 0.3), inset 0 1px 0 var(--glass-highlight);
 
   /* Radii */
@@ -144,8 +144,8 @@
   --border-subtle: rgba(42, 37, 32, 0.06);
   --border-medium: rgba(42, 37, 32, 0.10);
   --border-strong: rgba(42, 37, 32, 0.16);
-  --accent-glow: rgba(42, 107, 124, 0.15);
-  --accent-soft: rgba(42, 107, 124, 0.06);
+  --accent-glow: rgba(139, 38, 53, 0.15);
+  --accent-soft: rgba(139, 38, 53, 0.06);
   --text-success: #3D7A5C;
   --text-error: #A44040;
   --bg-success-subtle: rgba(90, 158, 124, 0.08);
@@ -156,12 +156,12 @@
   --bg-elevated-80: rgba(229, 224, 216, 0.8);
   --bg-tertiary-30: rgba(239, 235, 228, 0.3);
   --bg-tertiary-50: rgba(239, 235, 228, 0.5);
-  --accent-primary-10: rgba(42, 107, 124, 0.06);
-  --accent-primary-15: rgba(42, 107, 124, 0.08);
-  --accent-primary-20: rgba(42, 107, 124, 0.10);
-  --accent-primary-25: rgba(42, 107, 124, 0.14);
-  --accent-primary-30: rgba(42, 107, 124, 0.16);
-  --accent-primary-40: rgba(42, 107, 124, 0.20);
+  --accent-primary-10: rgba(139, 38, 53, 0.06);
+  --accent-primary-15: rgba(139, 38, 53, 0.08);
+  --accent-primary-20: rgba(139, 38, 53, 0.10);
+  --accent-primary-25: rgba(139, 38, 53, 0.14);
+  --accent-primary-30: rgba(139, 38, 53, 0.16);
+  --accent-primary-40: rgba(139, 38, 53, 0.20);
   --shadow-sm: 0 1px 2px rgba(42, 37, 32, 0.04);
   --shadow-md: 0 4px 8px -2px rgba(42, 37, 32, 0.06);
   --shadow-lg: 0 12px 24px -4px rgba(42, 37, 32, 0.08);
@@ -208,7 +208,7 @@ a:hover { text-decoration: underline; }
 }
 .ambient-orb-1 {
   width: 600px; height: 600px;
-  background: radial-gradient(circle, rgba(42, 107, 124, 0.08) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(139, 38, 53, 0.08) 0%, transparent 70%);
   top: -15%; left: -10%;
   animation-delay: 0s;
 }
@@ -221,7 +221,7 @@ a:hover { text-decoration: underline; }
 }
 .ambient-orb-3 {
   width: 400px; height: 400px;
-  background: radial-gradient(circle, rgba(42, 107, 124, 0.05) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(139, 38, 53, 0.05) 0%, transparent 70%);
   top: 40%; left: 50%;
   transform: translateX(-50%);
   animation-delay: -18s;
@@ -307,9 +307,9 @@ a:hover { text-decoration: underline; }
   transition: all var(--duration-normal) var(--ease-out-expo);
 }
 .glass-input:focus-within {
-  border-color: rgba(42, 107, 124, 0.35);
+  border-color: rgba(139, 38, 53, 0.35);
   box-shadow:
-    0 0 0 3px rgba(42, 107, 124, 0.10),
+    0 0 0 3px rgba(139, 38, 53, 0.10),
     0 4px 24px rgba(30, 25, 20, 0.15),
     inset 0 1px 0 rgba(242, 237, 231, 0.04);
 }
@@ -334,10 +334,10 @@ a:hover { text-decoration: underline; }
 }
 
 .message-user {
-  background: rgba(42, 107, 124, 0.08);
-  border: 1px solid rgba(42, 107, 124, 0.15);
+  background: rgba(139, 38, 53, 0.08);
+  border: 1px solid rgba(139, 38, 53, 0.15);
   border-radius: 20px 20px 4px 20px;
-  box-shadow: 0 2px 12px -4px rgba(42, 107, 124, 0.12);
+  box-shadow: 0 2px 12px -4px rgba(139, 38, 53, 0.12);
 }
 
 .message-assistant {
@@ -349,14 +349,14 @@ a:hover { text-decoration: underline; }
    ============================================================================ */
 .thinking-stream {
   border-left: 2px solid var(--accent-primary);
-  background: rgba(42, 107, 124, 0.04);
+  background: rgba(139, 38, 53, 0.04);
   border-radius: 0 12px 12px 0;
   overflow: hidden;
 }
 
 .thinking-block {
-  border-left: 2px solid rgba(42, 107, 124, 0.25);
-  background: rgba(42, 107, 124, 0.03);
+  border-left: 2px solid rgba(139, 38, 53, 0.25);
+  background: rgba(139, 38, 53, 0.03);
   border-radius: 0 12px 12px 0;
   overflow: hidden;
 }
@@ -444,9 +444,9 @@ a:hover { text-decoration: underline; }
 
 /* Inline code — accent tint */
 .markdown-content code {
-  background: rgba(42, 107, 124, 0.08);
-  border: 1px solid rgba(42, 107, 124, 0.12);
-  color: #6BAFBF;
+  background: rgba(139, 38, 53, 0.08);
+  border: 1px solid rgba(139, 38, 53, 0.12);
+  color: #D4777F;
   padding: 0.15em 0.4em;
   border-radius: 6px;
   font-family: 'JetBrains Mono', 'Fira Code', monospace;
@@ -469,7 +469,7 @@ a:hover { text-decoration: underline; }
 /* Blockquotes */
 .markdown-content blockquote {
   border-left: 3px solid var(--accent-primary);
-  background: rgba(42, 107, 124, 0.04);
+  background: rgba(139, 38, 53, 0.04);
   padding: 0.75em 1em;
   margin: 0.75em 0;
   border-radius: 0 8px 8px 0;
@@ -495,7 +495,7 @@ a:hover { text-decoration: underline; }
 .markdown-content a {
   color: var(--accent-primary);
   text-decoration: underline;
-  text-decoration-color: rgba(42, 107, 124, 0.3);
+  text-decoration-color: rgba(139, 38, 53, 0.3);
   text-underline-offset: 2px;
   transition: text-decoration-color var(--duration-fast);
 }
@@ -552,13 +552,13 @@ a:hover { text-decoration: underline; }
   border-radius: var(--radius-xl);
   padding: 0.6rem 1.25rem;
   font-size: 0.875rem;
-  box-shadow: 0 2px 8px rgba(42, 107, 124, 0.20);
+  box-shadow: 0 2px 8px rgba(139, 38, 53, 0.20);
   transition: all var(--duration-normal) var(--ease-out-expo);
   cursor: pointer;
 }
 .btn-primary:hover {
   background: var(--accent-secondary);
-  box-shadow: 0 4px 16px rgba(42, 107, 124, 0.25);
+  box-shadow: 0 4px 16px rgba(139, 38, 53, 0.25);
   transform: translateY(-1px);
 }
 .btn-primary:active { transform: translateY(0) scale(0.97); }
@@ -587,7 +587,7 @@ a:hover { text-decoration: underline; }
   width: 96px; height: 96px;
   border-radius: 28px;
   background: var(--accent-primary);
-  box-shadow: 0 8px 32px -8px rgba(42, 107, 124, 0.3), inset 0 -4px 12px rgba(0,0,0,0.15), inset 0 2px 6px rgba(242, 237, 231, 0.1);
+  box-shadow: 0 8px 32px -8px rgba(139, 38, 53, 0.3), inset 0 -4px 12px rgba(0,0,0,0.15), inset 0 2px 6px rgba(242, 237, 231, 0.1);
   position: relative; z-index: 2;
 }
 .gradient-orb-glow {
@@ -596,7 +596,7 @@ a:hover { text-decoration: underline; }
   top: 50%; left: 50%;
   transform: translate(-50%, -50%);
   border-radius: 50%;
-  background: radial-gradient(circle, rgba(42, 107, 124, 0.15) 0%, transparent 70%);
+  background: radial-gradient(circle, rgba(139, 38, 53, 0.15) 0%, transparent 70%);
   z-index: 1;
   animation: glow-pulse 6s ease-in-out infinite;
 }
@@ -684,9 +684,9 @@ a:hover { text-decoration: underline; }
   100% { background-position: 0% 50%; }
 }
 @keyframes pulse-ring {
-  0% { box-shadow: 0 0 0 0 rgba(42, 107, 124, 0.3); }
-  70% { box-shadow: 0 0 0 6px rgba(42, 107, 124, 0); }
-  100% { box-shadow: 0 0 0 0 rgba(42, 107, 124, 0); }
+  0% { box-shadow: 0 0 0 0 rgba(139, 38, 53, 0.3); }
+  70% { box-shadow: 0 0 0 6px rgba(139, 38, 53, 0); }
+  100% { box-shadow: 0 0 0 0 rgba(139, 38, 53, 0); }
 }
 
 .animate-fade-in { animation: fade-in 0.4s var(--ease-out-expo); }

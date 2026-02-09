@@ -1,8 +1,8 @@
 //! MCP Configuration Manager
 //!
 //! Handles parsing and loading of MCP configurations from:
-//! 1. Global mcp.json (~/.localm/mcp.json)
-//! 2. Project-local mcp.json (./.localm/mcp.json)
+//! 1. Global mcp.json (~/.localclaw/mcp.json)
+//! 2. Project-local mcp.json (./.localclaw/mcp.json)
 //!
 //! Note: Presets are available via get_all_presets() for UI suggestions,
 //! but are NOT automatically loaded as active servers.
@@ -38,8 +38,8 @@ struct McpJsonServerConfig {
 /// Load MCP configurations from mcp.json files only
 /// 
 /// Priority (highest to lowest):
-/// 1. Local project config (./.localm/mcp.json)
-/// 2. Global config (~/.localm/mcp.json)
+/// 1. Local project config (./.localclaw/mcp.json)
+/// 2. Global config (~/.localclaw/mcp.json)
 /// 
 /// Note: Presets are NOT automatically loaded. Use get_available_presets() 
 /// to show preset suggestions in UI.
@@ -56,8 +56,8 @@ pub async fn load_effective_config() -> Vec<McpServerConfig> {
     }
 
     // 2. Load Local Config (current directory)
-    // We look for .localm/mcp.json in the current working directory
-    let local_config_path = PathBuf::from(".localm").join("mcp.json");
+    // We look for .localclaw/mcp.json in the current working directory
+    let local_config_path = PathBuf::from(".localclaw").join("mcp.json");
     if let Some(configs) = load_config_from_file(&local_config_path).await {
         tracing::info!("Loaded local MCP config from {}", local_config_path.display());
         merge_configs(&mut config_map, configs);

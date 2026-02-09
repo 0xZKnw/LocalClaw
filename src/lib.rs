@@ -1,6 +1,6 @@
-//! LocaLM Library
+//! LocalClaw Library
 //!
-//! Core library for the LocaLM desktop application.
+//! Core library for the LocalClaw desktop application.
 
 pub mod agent;
 pub mod app;
