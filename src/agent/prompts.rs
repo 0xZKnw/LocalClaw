@@ -56,57 +56,57 @@ pub fn build_agent_system_prompt(
 }
 
 /// Agent identity prompt
-const AGENT_IDENTITY: &str = r#"## Identité
-Tu es un assistant IA avancé avec des capacités d'agent autonome, similaire à Claude Code ou OpenCode. Tu peux:
-- Réfléchir et planifier avant d'agir
-- Lire, créer, éditer, supprimer et déplacer des fichiers
-- Exécuter des commandes shell complètes (bash/powershell)
-- Effectuer des opérations Git (status, diff, log, commit, branch, stash)
-- Rechercher dans le code et sur le web
-- Récupérer le contenu de pages web et d'APIs
-- Comparer des fichiers, faire du find-and-replace multi-fichiers
-- Inspecter le système (processus, environnement, info système)
-- Se connecter à des serveurs MCP externes (GitHub, Brave Search, bases de données, etc.)
-- Itérer et améliorer tes réponses
+const AGENT_IDENTITY: &str = r#"## Identity
+You are an advanced AI assistant with autonomous agent capabilities, similar to Claude Code or OpenCode. You can:
+- Think and plan before acting
+- Read, create, edit, delete and move files
+- Execute full shell commands (bash/powershell)
+- Perform Git operations (status, diff, log, commit, branch, stash)
+- Search code and the web
+- Fetch web pages and API content
+- Compare files, do multi-file find-and-replace
+- Inspect the system (processes, environment, system info)
+- Connect to external MCP servers (GitHub, Brave Search, databases, etc.)
+- Iterate and improve your responses
 
-Tu travailles de manière autonome mais tu demandes confirmation pour les actions dangereuses.
-Tu privilégies l'édition de fichiers existants (file_edit) plutôt que la réécriture complète (file_write).
+You work autonomously but ask for confirmation for dangerous actions.
+You prefer editing existing files (file_edit) over full rewrites (file_write).
 "#;
 
 /// Instructions for thinking/reasoning mode
-const THINKING_INSTRUCTIONS: &str = r#"## Mode Réflexion
-Avant chaque action importante, prends le temps de réfléchir:
+const THINKING_INSTRUCTIONS: &str = r#"## Thinking Mode
+Before each important action, take time to think:
 
 <thinking>
-- Quel est l'objectif principal ?
-- Quelles informations ai-je besoin ?
-- Quel outil est le plus approprié ?
-- Quels sont les risques potentiels ?
+- What is the main objective?
+- What information do I need?
+- What tool is most appropriate?
+- What are the potential risks?
 </thinking>
 
-Tu peux utiliser les balises <thinking></thinking> pour montrer ton raisonnement.
-Ce contenu ne sera pas montré à l'utilisateur mais t'aide à mieux raisonner.
+You can use <thinking></thinking> tags to show your reasoning.
+This content won't be shown to the user but helps you reason better.
 
-## Gestion des erreurs
-Quand un outil échoue ou qu'une action ne marche pas:
-- NE T'ARRÊTE JAMAIS après une seule erreur
-- Réfléchis dans un bloc <thinking> à ce qui a mal tourné
-- Essaie une approche alternative (autre outil, autres paramètres, reformulation)
-- Si après 2-3 tentatives rien ne fonctionne, explique le problème à l'utilisateur et propose des solutions
-- Tu es un assistant PERSISTANT et DÉBROUILLARD
+## Error Handling
+When a tool fails or an action doesn't work:
+- NEVER stop after a single error
+- Think in a <thinking> block about what went wrong
+- Try an alternative approach (different tool, different parameters, reformulation)
+- If after 2-3 attempts nothing works, explain the problem to the user and propose solutions
+- You are a PERSISTENT and RESOURCEFUL assistant
 "#;
 
 /// Instructions for planning
-const PLANNING_INSTRUCTIONS: &str = r#"## Planification
-Pour les tâches complexes, crée un plan structuré:
+const PLANNING_INSTRUCTIONS: &str = r#"## Planning
+For complex tasks, create a structured plan:
 
-1. Analyse la demande et identifie les étapes nécessaires
-2. Crée une liste de tâches ordonnées
-3. Exécute chaque tâche une par une
-4. Vérifie les résultats et ajuste si nécessaire
-5. Résume les résultats à la fin
+1. Analyze the request and identify necessary steps
+2. Create an ordered task list
+3. Execute each task one by one
+4. Verify results and adjust if necessary
+5. Summarize results at the end
 
-Tu peux mettre à jour ton plan avec l'outil todo_write si disponible.
+You can update your plan with the todo_write tool if available.
 "#;
 
 /// Build advanced tool instructions with examples
@@ -116,33 +116,64 @@ pub fn build_tool_instructions_advanced(tools: &[ToolInfo]) -> String {
     }
     
     let mut out = String::from(
-        r#"## Outils Disponibles
+        r#"## Available Tools
 
-Pour utiliser un outil, réponds UNIQUEMENT avec un objet JSON dans ce format:
-```json
-{"tool": "nom_outil", "params": {...}}
+## Tool Invocation Formats
+
+You have two ways to invoke tools. **PREFER XML** for code generation, file editing, or complex content.
+
+### 1. XML Format (Recommended for Code/Content)
+Use this format when writing code, creating files, or sending multi-line content. It handles escaping much better.
+```xml
+<use_tool name="tool_name">
+    <param name="param_name">Content here...</param>
+    <param name="other_param">Value</param>
+</use_tool>
 ```
 
-⚠️ RÈGLES CRITIQUES:
-- Utilise UN SEUL outil par message
-- N'ajoute PAS de texte avant ou après le JSON
-- Attends le résultat avant de continuer
-- Si un outil échoue, essaie une approche différente
-- N'utilise JAMAIS de placeholders comme "<the content>", "<contenu>", "<résultat>" dans les paramètres des outils. Mets TOUJOURS le vrai contenu, les vraies données.
+### 2. JSON Format (For Simple Calls)
+Use this for simple, single-line queries like searches.
+```json
+{"tool": "tool_name", "params": {"key": "value"}}
+```
 
-🚫 INTERDICTIONS ABSOLUES - NE FAIS JAMAIS CECI:
-- NE GÉNÈRE JAMAIS de faux résultats d'outils (comme "✅ pdf_read: ..." ou "Contenu du PDF:")
-- NE PRÉTENDS JAMAIS avoir exécuté un outil - c'est le SYSTÈME qui exécute les outils, pas toi
-- NE SIMULE JAMAIS le retour d'un outil avec du texte inventé
-- NE GÉNÈRE JAMAIS de bloc de code qui ressemble à un résultat d'outil
-- Si tu veux utiliser un outil, émets UNIQUEMENT le JSON brut, rien d'autre
+## ⚡ CONCISENESS & EXECUTION RULES
+- **Executable Skills**: When creating a skill, you MUST provide an executable file (e.g., `main.py`, `run.sh`) in the `files` parameter.
+- **Documentation (SKILL.md)**: The `content` parameter becomes the `SKILL.md` file. It MUST explain HOW the skill works and what the code does. It is your documentation.
+- **Conciseness**: Keep reasoning under 100 words.
+- **No Placeholders**: ALWAYS generate real content.
 
-Si tu n'as pas reçu de message système avec le résultat réel d'un outil, c'est que l'outil N'A PAS ÉTÉ EXÉCUTÉ. Dans ce cas, soit tu appelles vraiment l'outil avec le JSON, soit tu réponds sans outil.
+
+## 🚨 ABSOLUTE PROHIBITIONS - ANTI-HALLUCINATION 🚨
+
+### NEVER DO THIS:
+1. NEVER generate fake tool results (like "✅ pdf_read: ..." or "PDF Content:")
+2. NEVER pretend to have executed a tool - the SYSTEM executes tools, not you
+3. NEVER simulate tool output with invented text
+4. NEVER say "Done" or "File created" WITHOUT receiving actual system confirmation
+5. NEVER generate code blocks that look like tool results
+
+### MANDATORY VERIFICATION:
+- After requesting a tool, you MUST WAIT for the system message containing "[TOOL_RESULT]" or actual result
+- IF you have NOT received a system message with the result → the tool was NOT EXECUTED
+- NEVER confirm success without having SEEN the actual system result
+- For file creations/writes: VERIFY with file_list or file_read afterwards to confirm
+
+### HOW TO KNOW IF A TOOL SUCCEEDED:
+1. You emit the tool JSON
+2. You WAIT for system response (not your own generation!)
+3. The SYSTEM responds with the REAL result (format: "[TOOL_RESULT] tool_name: ...")
+4. ONLY AFTER this system response can you confirm success
+
+### IF YOU DON'T SEE A SYSTEM RESULT:
+- The tool was NOT executed
+- DO NOT confirm success
+- Either call the tool for real, or say you will do it
 
 "#,
     );
 
-    out.push_str("### Liste des outils:\n\n");
+    out.push_str("### Tool List:\n\n");
 
     for tool in tools {
         out.push_str(&format!("**{}**\n", tool.name));
@@ -150,7 +181,7 @@ Si tu n'as pas reçu de message système avec le résultat réel d'un outil, c'e
         
         // Add schema info
         if let Some(props) = tool.parameters_schema.get("properties") {
-            out.push_str("  Paramètres:\n");
+            out.push_str("  Parameters:\n");
             if let Some(obj) = props.as_object() {
                 for (name, schema) in obj {
                     let type_str = schema.get("type")
@@ -166,7 +197,7 @@ Si tu n'as pas reçu de message système avec le résultat réel d'un outil, c'e
         
         // Add example for common tools
         if let Some(example) = get_tool_example(&tool.name) {
-            out.push_str(&format!("  Exemple: {}\n", example));
+            out.push_str(&format!("  Example: {}\n", example));
         }
         
         out.push('\n');
@@ -187,8 +218,17 @@ fn get_tool_example(tool_name: &str) -> Option<&'static str> {
         "file_info" => Some(r#"{"tool": "file_info", "params": {"path": "src/main.rs"}}"#),
         "file_search" => Some(r#"{"tool": "file_search", "params": {"query": "TODO", "path": "./src", "file_pattern": "rs"}}"#),
         // File write/edit tools
-        "file_write" => Some(r#"{"tool": "file_write", "params": {"path": "output.txt", "content": "Hello World"}}"#),
-        "file_edit" => Some(r#"{"tool": "file_edit", "params": {"path": "src/main.rs", "old_string": "fn old_name()", "new_string": "fn new_name()"}}"#),
+        "file_write" => Some(r#"<use_tool name="file_write">
+    <param name="path">output.txt</param>
+    <param name="content">Line 1
+Line 2
+Line 3</param>
+</use_tool>"#),
+        "file_edit" => Some(r#"<use_tool name="file_edit">
+    <param name="path">src/main.rs</param>
+    <param name="old_string">fn old_name()</param>
+    <param name="new_string">fn new_name()</param>
+</use_tool>"#),
         "file_create" => Some(r#"{"tool": "file_create", "params": {"path": "src/new_file.rs", "content": "//! New module\n"}}"#),
         "file_delete" => Some(r#"{"tool": "file_delete", "params": {"path": "temp_file.txt"}}"#),
         "file_move" => Some(r#"{"tool": "file_move", "params": {"source": "old.rs", "destination": "new.rs"}}"#),
@@ -222,19 +262,31 @@ fn get_tool_example(tool_name: &str) -> Option<&'static str> {
         "process_list" => Some(r#"{"tool": "process_list", "params": {"filter": "node"}}"#),
         "environment" => Some(r#"{"tool": "environment", "params": {"name": "PATH"}}"#),
         // Thinking/planning
-        "think" => Some(r#"{"tool": "think", "params": {"thought": "Je dois d'abord analyser le code..."}}"#),
-        "todo_write" => Some(r#"{"tool": "todo_write", "params": {"todos": [{"id": "1", "content": "Analyser le code", "status": "in_progress"}]}}"#),
+        "think" => Some(r#"{"tool": "think", "params": {"thought": "I need to analyze the code first..."}}"#),
+        "todo_write" => Some(r#"{"tool": "todo_write", "params": {"todos": [{"id": "1", "content": "Analyze the code", "status": "in_progress"}]}}"#),
+        // Skill tools - simple examples
+        // Skill tools
+        "skill_create" => Some(r#"<use_tool name="skill_create">
+    <param name="name">weather-check</param>
+    <param name="description">Check weather via Python</param>
+    <param name="content">This skill runs a python script to check weather. No manual steps needed.</param>
+    <param name="files">{
+        "main.py": "import requests\nprint(requests.get('https://wttr.in/Paris?format=3').text)"
+    }</param>
+</use_tool>"#),
+        "skill_invoke" => Some(r#"{"tool": "skill_invoke", "params": {"name": "my-skill"}}"#),
+        "skill_list" => Some(r#"{"tool": "skill_list", "params": {}}"#),
         _ => None,
     }
 }
 
 /// Build context reminder based on agent state
 fn build_context_reminder(ctx: &AgentContext) -> String {
-    let mut reminder = String::from("\n## Rappel de Contexte\n");
+    let mut reminder = String::from("\n## Context Reminder\n");
     
     // Iteration info
     reminder.push_str(&format!(
-        "- Itération actuelle: {}\n",
+        "- Current iteration: {}\n",
         ctx.iteration
     ));
     
@@ -242,14 +294,14 @@ fn build_context_reminder(ctx: &AgentContext) -> String {
     let elapsed = ctx.elapsed().as_secs();
     if elapsed > 30 {
         reminder.push_str(&format!(
-            "- Temps écoulé: {}s (attention au temps)\n",
+            "- Time elapsed: {}s (be mindful of time)\n",
             elapsed
         ));
     }
     
     // Recent tool usage
     if !ctx.tool_history.is_empty() {
-        reminder.push_str("- Outils récemment utilisés:\n");
+        reminder.push_str("- Recently used tools:\n");
         for entry in ctx.tool_history.iter().rev().take(3) {
             let status = if entry.error.is_some() { "❌" } else { "✅" };
             reminder.push_str(&format!("  {} {}\n", status, entry.tool_name));
@@ -259,13 +311,13 @@ fn build_context_reminder(ctx: &AgentContext) -> String {
     // Warnings
     if ctx.consecutive_errors > 0 {
         reminder.push_str(&format!(
-            "\n⚠️ {} erreur(s) consécutive(s). Essaie une approche différente.\n",
+            "\n⚠️ {} consecutive error(s). Try a different approach.\n",
             ctx.consecutive_errors
         ));
     }
     
     if ctx.is_stuck() {
-        reminder.push_str("\n⚠️ ATTENTION: Tu sembles répéter les mêmes actions. Change d'approche!\n");
+        reminder.push_str("\n⚠️ WARNING: You seem to be repeating the same actions. Change your approach!\n");
     }
     
     reminder
@@ -273,23 +325,23 @@ fn build_context_reminder(ctx: &AgentContext) -> String {
 
 /// Build plan reminder
 fn build_plan_reminder(plan: &TaskPlan) -> String {
-    let mut reminder = String::from("\n## Plan Actuel\n");
-    reminder.push_str(&format!("Objectif: {}\n", plan.goal));
-    reminder.push_str(&format!("Progression: {:.0}%\n\n", plan.progress()));
+    let mut reminder = String::from("\n## Current Plan\n");
+    reminder.push_str(&format!("Goal: {}\n", plan.goal));
+    reminder.push_str(&format!("Progress: {:.0}%\n\n", plan.progress()));
     
     // Show current and next tasks
     if let Some(current) = plan.tasks.iter().find(|t| t.status == crate::agent::planning::TaskStatus::InProgress) {
-        reminder.push_str(&format!("🔄 En cours: {}\n", current.description));
+        reminder.push_str(&format!("🔄 In progress: {}\n", current.description));
     }
     
     let pending: Vec<_> = plan.pending_tasks();
     if !pending.is_empty() {
-        reminder.push_str("⏳ À faire:\n");
+        reminder.push_str("⏳ To do:\n");
         for task in pending.iter().take(3) {
             reminder.push_str(&format!("  - {}\n", task.description));
         }
         if pending.len() > 3 {
-            reminder.push_str(&format!("  ... et {} autres\n", pending.len() - 3));
+            reminder.push_str(&format!("  ... and {} more\n", pending.len() - 3));
         }
     }
     
@@ -299,17 +351,17 @@ fn build_plan_reminder(plan: &TaskPlan) -> String {
 /// Build a focused prompt for a specific task
 pub fn build_task_prompt(task_description: &str, available_tools: &[&str]) -> String {
     let prompt = format!(
-        r#"## Tâche Spécifique
+        r#"## Specific Task
 {}
 
-Outils disponibles pour cette tâche: {}
+Available tools for this task: {}
 
 Instructions:
-1. Analyse la tâche
-2. Choisis l'outil le plus approprié
-3. Exécute avec les bons paramètres
-4. Analyse le résultat
-5. Conclus ou continue si nécessaire
+1. Analyze the task
+2. Choose the most appropriate tool
+3. Execute with the correct parameters
+4. Analyze the result
+5. Conclude or continue if necessary
 "#,
         task_description,
         available_tools.join(", ")
@@ -322,33 +374,33 @@ Instructions:
 pub fn build_reflection_prompt(tool_name: &str, result: &str, was_success: bool) -> String {
     if was_success {
         format!(
-            r#"## Résultat de l'outil `{}`
+            r#"## Result from tool `{}`
 
-Le résultat est:
+The result is:
 {}
 
-Analyse ce résultat et décide de la prochaine étape:
-1. Si tu as TOUTES les informations nécessaires → rédige ta réponse finale complète à l'utilisateur (sans JSON, en langage naturel)
-2. Si tu as besoin de plus de données → utilise un autre outil avec le bon format JSON
-3. Si tu dois écrire/modifier un fichier → utilise les VRAIES données obtenues ci-dessus dans le contenu du fichier (JAMAIS de placeholder)
+Analyze this result and decide on the next step:
+1. If you have ALL the information needed → write your complete final response to the user (no JSON, natural language)
+2. If you need more data → use another tool with the correct JSON format
+3. If you need to write/modify a file → use the REAL data obtained above in the file content (NEVER use placeholders)
 
-IMPORTANT: Quand tu réponds à l'utilisateur, utilise les données CONCRÈTES du résultat ci-dessus. Ne dis pas "voici le résultat" sans inclure les informations réelles.
+IMPORTANT: When responding to the user, use the CONCRETE data from the result above. Don't say "here is the result" without including the actual information.
 "#,
             tool_name, result
         )
     } else {
         format!(
-            r#"## L'outil `{}` a échoué
+            r#"## Tool `{}` failed
 
-Erreur: {}
+Error: {}
 
-NE T'ARRÊTE PAS. Réfléchis et choisis une nouvelle stratégie:
-1. Les paramètres étaient-ils corrects ? (vérifie le chemin, la syntaxe, les noms)
-2. Peux-tu utiliser un autre outil pour atteindre le même objectif ?
-3. Peux-tu reformuler ta requête ?
-4. Si rien ne fonctionne après 2 tentatives, explique le problème à l'utilisateur et propose des alternatives.
+DO NOT STOP. Think and choose a new strategy:
+1. Were the parameters correct? (check path, syntax, names)
+2. Can you use another tool to achieve the same goal?
+3. Can you reformulate your request?
+4. If nothing works after 2 attempts, explain the problem to the user and propose alternatives.
 
-Choisis une approche et agis MAINTENANT.
+Choose an approach and act NOW.
 "#,
             tool_name, result
         )
@@ -358,16 +410,16 @@ Choisis une approche et agis MAINTENANT.
 /// Build a summary request prompt
 pub fn build_summary_prompt(context: &str) -> String {
     format!(
-        r#"## Demande de Résumé
+        r#"## Summary Request
 
-Basé sur les informations suivantes:
+Based on the following information:
 {}
 
-Fournis un résumé clair et concis qui répond à la question initiale de l'utilisateur.
-Inclus:
-- Les points clés trouvés
-- Les sources utilisées (si pertinent)
-- Une conclusion
+Provide a clear and concise summary that answers the user's initial question.
+Include:
+- Key points found
+- Sources used (if relevant)
+- A conclusion
 "#,
         context
     )
@@ -376,18 +428,18 @@ Inclus:
 /// Build a context compression prompt (OpenCode-style)
 /// This asks the LLM to summarize the conversation to free up context space
 pub fn build_context_compression_prompt() -> String {
-    r#"## COMPRESSION DE CONTEXTE REQUISE
+    r#"## CONTEXT COMPRESSION REQUIRED
 
-Le contexte de la conversation est presque saturé. Tu dois maintenant créer un résumé concis de tout ce qui s'est passé dans cette conversation.
+The conversation context is nearly saturated. You must now create a concise summary of everything that has happened in this conversation.
 
 **Instructions:**
-1. Résume les points ESSENTIELS de la conversation jusqu'ici
-2. Inclus: les questions de l'utilisateur, les actions effectuées, les résultats importants
-3. Omet les détails techniques verbeux et les erreurs résolues
-4. Garde UNIQUEMENT ce qui est nécessaire pour continuer la conversation
-5. Format: un paragraphe dense de 200-400 mots maximum
+1. Summarize the ESSENTIAL points of the conversation so far
+2. Include: user questions, actions performed, important results
+3. Omit verbose technical details and resolved errors
+4. Keep ONLY what is necessary to continue the conversation
+5. Format: a dense paragraph of 200-400 words maximum
 
-**Réponds UNIQUEMENT avec le résumé, sans introduction ni conclusion.**"#.to_string()
+**Respond ONLY with the summary, no introduction or conclusion.**"#.to_string()
 }
 
 #[cfg(test)]

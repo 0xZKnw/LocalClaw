@@ -53,7 +53,7 @@ pub fn ModelPicker() -> Element {
                         return app_state.model_state.set(ModelState::Error(e.to_string()));
                     }
                 }
-                engine.load_model(&path, gpu_layers)
+                engine.load_model_async(&path, gpu_layers).await
             };
             match result {
                 Ok(_info) => app_state.model_state.set(ModelState::Loaded(path)),

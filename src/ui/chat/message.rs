@@ -48,8 +48,8 @@ impl From<Message> for crate::types::message::Message {
 #[derive(Clone, PartialEq, Debug)]
 enum ContentPart {
     Text(String),
-    Thinking(String),           // Completed <think>...</think> block
-    ThinkingStreaming(String),   // Open <think> block still being generated
+    Thinking(String),          // Completed <think>...</think> block
+    ThinkingStreaming(String), // Open <think> block still being generated
 }
 
 /// Parse thinking blocks from message content.
@@ -193,13 +193,13 @@ fn ThinkingBlock(content: String) -> Element {
 fn ThinkingBlockStreaming(content: String) -> Element {
     let app_state = use_context::<AppState>();
     let is_en = app_state.settings.read().language == "en";
-    
+
     let display_content = if content.trim().is_empty() {
         "...".to_string()
     } else {
         content.clone()
     };
-    
+
     rsx! {
         div { class: "thinking-stream my-2",
             // Header with subtle animated dots
@@ -208,21 +208,21 @@ fn ThinkingBlockStreaming(content: String) -> Element {
                 style: "padding: 0.5rem 0.75rem;",
 
                 div { class: "flex items-center gap-1",
-                    div { 
+                    div {
                         class: "w-1 h-1 rounded-full animate-pulse",
                         style: "background: var(--accent-primary); opacity: 0.6;"
                     }
-                    div { 
+                    div {
                         class: "w-1 h-1 rounded-full animate-pulse delay-150",
                         style: "background: var(--accent-primary); opacity: 0.6;"
                     }
-                    div { 
+                    div {
                         class: "w-1 h-1 rounded-full animate-pulse delay-300",
                         style: "background: var(--accent-primary); opacity: 0.6;"
                     }
                 }
 
-                span { 
+                span {
                     class: "text-xs",
                     style: "color: var(--text-tertiary);",
                     if is_en { "Thinking..." } else { "Reflexion en cours..." }
@@ -261,7 +261,7 @@ enum MarkdownBlock {
     Paragraph(String),
     Heading(u8, String),
     CodeBlock(String, String), // (language, code)
-    MathBlock(String),          // LaTeX math block
+    MathBlock(String),         // LaTeX math block
     UnorderedList(Vec<String>),
     OrderedList(Vec<String>),
     HorizontalRule,
@@ -306,7 +306,7 @@ fn parse_markdown_blocks(content: &str) -> Vec<MarkdownBlock> {
         if trimmed.starts_with("$$") {
             let first_line_content = trimmed.trim_start_matches('$').trim();
             let mut math_lines = Vec::new();
-            
+
             if first_line_content.ends_with("$$") {
                 // Single line math block
                 let math = first_line_content.trim_end_matches('$').trim();
@@ -314,7 +314,7 @@ fn parse_markdown_blocks(content: &str) -> Vec<MarkdownBlock> {
                 i += 1;
                 continue;
             }
-            
+
             if !first_line_content.is_empty() {
                 math_lines.push(first_line_content.to_string());
             }
@@ -391,24 +391,24 @@ fn parse_markdown_blocks(content: &str) -> Vec<MarkdownBlock> {
                     break;
                 }
             }
-            
+
             if table_lines.len() >= 2 {
                 // Parse header row
                 let headers: Vec<String> = parse_table_row(table_lines[0]);
-                
+
                 // Skip separator row (|---|---|)
                 let data_start = if table_lines.len() > 1 && is_table_separator(table_lines[1]) {
                     2
                 } else {
                     1
                 };
-                
+
                 // Parse data rows
                 let rows: Vec<Vec<String>> = table_lines[data_start..]
                     .iter()
                     .map(|line| parse_table_row(line))
                     .collect();
-                
+
                 blocks.push(MarkdownBlock::Table(rows, headers));
             }
             continue;
@@ -438,7 +438,11 @@ fn parse_markdown_blocks(content: &str) -> Vec<MarkdownBlock> {
         }
 
         // Ordered list
-        if trimmed.chars().next().map(|c| c.is_ascii_digit()).unwrap_or(false)
+        if trimmed
+            .chars()
+            .next()
+            .map(|c| c.is_ascii_digit())
+            .unwrap_or(false)
             && trimmed.contains(". ")
         {
             let mut items = Vec::new();
@@ -577,7 +581,7 @@ fn render_block(block: MarkdownBlock) -> Element {
                     thead { class: "bg-[var(--bg-tertiary)]",
                         tr {
                             for header in headers.iter() {
-                                th { 
+                                th {
                                     class: "px-4 py-3 text-left font-semibold text-[var(--text-primary)] border-b border-[var(--border-subtle)]",
                                     {render_inline(header)}
                                 }
@@ -586,10 +590,10 @@ fn render_block(block: MarkdownBlock) -> Element {
                     }
                     tbody {
                         for (row_idx, row) in rows.iter().enumerate() {
-                            tr { 
+                            tr {
                                 class: if row_idx % 2 == 0 { "bg-[var(--bg-secondary)]" } else { "bg-[var(--bg-primary)]" },
                                 for cell in row.iter() {
-                                    td { 
+                                    td {
                                         class: "px-4 py-2.5 text-[var(--text-secondary)] border-b border-[var(--border-subtle)]/50",
                                         {render_inline(cell)}
                                     }
@@ -680,7 +684,9 @@ fn parse_inline_markdown(text: &str) -> Vec<InlineSegment> {
             }
             let start = i + 3;
             i += 3;
-            while i + 2 < chars.len() && !(chars[i] == '*' && chars[i + 1] == '*' && chars[i + 2] == '*') {
+            while i + 2 < chars.len()
+                && !(chars[i] == '*' && chars[i + 1] == '*' && chars[i + 2] == '*')
+            {
                 i += 1;
             }
             let content: String = chars[start..i].iter().collect();
@@ -808,7 +814,7 @@ fn render_segment(segment: InlineSegment) -> Element {
 /// Check if content is a tool-related message
 fn is_tool_message(content: &str) -> Option<ToolMessageType> {
     let trimmed = content.trim();
-    
+
     // Detect by leading emoji
     if trimmed.starts_with("🔧") || trimmed.starts_with("Utilisation de l'outil") {
         return Some(ToolMessageType::InProgress);
@@ -816,7 +822,10 @@ fn is_tool_message(content: &str) -> Option<ToolMessageType> {
     if trimmed.starts_with('⏳') || trimmed.starts_with("Autorisation requise") {
         return Some(ToolMessageType::PermissionRequired);
     }
-    if trimmed.starts_with('🚫') || trimmed.starts_with("Permission refusée") || trimmed.starts_with("Demande d'autorisation expirée") {
+    if trimmed.starts_with('🚫')
+        || trimmed.starts_with("Permission refusée")
+        || trimmed.starts_with("Demande d'autorisation expirée")
+    {
         return Some(ToolMessageType::PermissionDenied);
     }
     if trimmed.starts_with('✅') {
@@ -894,6 +903,7 @@ fn extract_duration(content: &str) -> Option<String> {
 }
 
 /// Extract permission level from content like "(Réseau)" or "(Écriture fichier)"
+#[allow(dead_code)]
 fn extract_permission_level(content: &str) -> Option<String> {
     // Look for pattern after tool name: `tool` (Level)
     if let Some(backtick_end) = content.rfind('`') {
@@ -901,7 +911,10 @@ fn extract_permission_level(content: &str) -> Option<String> {
         if let Some(paren_start) = after.find('(') {
             if let Some(paren_end) = after[paren_start..].find(')') {
                 let level = &after[paren_start + 1..paren_start + paren_end];
-                if !level.is_empty() && !level.contains("itération") && level.parse::<f64>().is_err() {
+                if !level.is_empty()
+                    && !level.contains("itération")
+                    && level.parse::<f64>().is_err()
+                {
                     return Some(level.to_string());
                 }
             }
@@ -929,7 +942,8 @@ fn ToolCard(message_type: ToolMessageType, content: String) -> Element {
 
     let show_spinner = message_type == ToolMessageType::InProgress;
     let is_success = message_type == ToolMessageType::Result;
-    let is_error = message_type == ToolMessageType::Error || message_type == ToolMessageType::PermissionDenied;
+    let is_error =
+        message_type == ToolMessageType::Error || message_type == ToolMessageType::PermissionDenied;
 
     // Compute duration style outside rsx for type inference
     let duration_style = if is_success {
@@ -941,10 +955,10 @@ fn ToolCard(message_type: ToolMessageType, content: String) -> Element {
     };
 
     rsx! {
-        div { 
+        div {
             class: "animate-fade-in",
             style: "margin: 0.35rem 0;",
-            
+
             // Ultra-minimal single line
             div {
                 class: "flex items-center gap-2",
@@ -955,17 +969,17 @@ fn ToolCard(message_type: ToolMessageType, content: String) -> Element {
 
                 // Status indicator - dot or spinner
                 if show_spinner {
-                    div { 
+                    div {
                         class: "flex items-center gap-0.5",
-                        div { 
+                        div {
                             class: "w-1 h-1 rounded-full animate-pulse",
                             style: format!("background: {};", accent_var)
                         }
-                        div { 
+                        div {
                             class: "w-1 h-1 rounded-full animate-pulse delay-100",
                             style: format!("background: {};", accent_var)
                         }
-                        div { 
+                        div {
                             class: "w-1 h-1 rounded-full animate-pulse delay-200",
                             style: format!("background: {};", accent_var)
                         }
@@ -987,7 +1001,7 @@ fn ToolCard(message_type: ToolMessageType, content: String) -> Element {
 
                 // Detail or result summary
                 if let Some(ref d) = detail {
-                    span { 
+                    span {
                         class: "text-xs truncate flex-1",
                         style: "color: var(--text-secondary); max-width: 300px;",
                         "{d}"
@@ -996,7 +1010,7 @@ fn ToolCard(message_type: ToolMessageType, content: String) -> Element {
 
                 // Right side - duration only (no verbose labels)
                 div { class: "flex-1" } // spacer
-                
+
                 if let Some(ref dur) = duration {
                     span {
                         class: "font-mono text-[10px]",

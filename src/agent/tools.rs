@@ -70,6 +70,10 @@ impl ToolRegistry {
     pub fn register_sync(&self, tool: Arc<dyn Tool>) {
         self.tools.insert(tool.name().to_string(), tool);
     }
+
+    pub fn remove(&self, name: &str) {
+        self.tools.remove(name);
+    }
     
     pub fn get(&self, name: &str) -> Option<Arc<dyn Tool>> {
         self.tools.get(name).map(|t| t.clone())
@@ -120,6 +124,9 @@ pub mod system;
 
 /// PDF tools (read, create, add page, merge)
 pub mod pdf;
+
+/// OpenRouter AI consultation tool
+pub mod openrouter;
 
 /// Skill creation tool
 pub mod skill_create;

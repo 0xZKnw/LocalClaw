@@ -122,7 +122,6 @@ impl Agent {
         use tools::filesystem;
         use tools::shell;
         use tools::git;
-        use tools::web;
         use tools::dev;
         use tools::system;
         use tools::skill_create;
@@ -136,7 +135,10 @@ impl Agent {
         // ============================================================
         self.tool_registry.register(Arc::new(builtins::ThinkTool)).await;
         self.tool_registry.register(Arc::new(builtins::TodoWriteTool)).await;
-        self.tool_registry.register(Arc::new(skill_create::SkillCreateTool)).await;
+        self.tool_registry.register(Arc::new(skill_create::SkillCreateTool::new(
+            self.skill_registry.clone(),
+            self.tool_registry.clone(),
+        ))).await;
         
         // ============================================================
         // Skill tools
@@ -286,6 +288,13 @@ impl Agent {
         tracing::info!("PDF tools registered (pdf_read, pdf_create, pdf_add_page, pdf_merge)");
         
         // ============================================================
+        // OpenRouter AI consultation tool
+        // ============================================================
+        use tools::openrouter;
+        self.tool_registry.register(Arc::new(openrouter::OpenRouterConsultTool)).await;
+        tracing::info!("OpenRouter tool registered (ai_consult)");
+        
+        // ============================================================
         // Skills (loaded from .localm/skills)
         // ============================================================
         tracing::info!("Loading skills...");
@@ -342,7 +351,7 @@ pub fn get_tool_permission(tool_name: &str) -> PermissionLevel {
         // Network tools (external requests)
         "web_search" | "code_search" | "company_research" 
         | "deep_research_start" | "deep_research_check" | "web_crawl"
-        | "web_fetch" | "web_download" => {
+        | "web_fetch" | "web_download" | "ai_consult" => {
             PermissionLevel::Network
         }
         // Write tools (file modifications)

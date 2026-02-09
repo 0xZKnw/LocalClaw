@@ -1,9 +1,11 @@
 //! MCP Configuration Manager
 //!
-//! Handles parsing, loading, and merging of MCP configurations from:
-//! 1. Built-in presets
-//! 2. Global mcp.json (~/.localm/mcp.json)
-//! 3. Project-local mcp.json (./.localm/mcp.json)
+//! Handles parsing and loading of MCP configurations from:
+//! 1. Global mcp.json (~/.localm/mcp.json)
+//! 2. Project-local mcp.json (./.localm/mcp.json)
+//!
+//! Note: Presets are available via get_all_presets() for UI suggestions,
+//! but are NOT automatically loaded as active servers.
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -11,7 +13,6 @@ use serde::{Deserialize, Serialize};
 use tokio::fs;
 
 use crate::agent::tools::mcp_client::{McpServerConfig, McpTransport};
-use crate::agent::tools::mcp_presets::get_all_presets;
 use crate::storage::get_data_dir;
 
 /// JSON structure matching Claude Desktop's mcp.json format
@@ -34,22 +35,18 @@ struct McpJsonServerConfig {
     url: Option<String>,
 }
 
-/// Load and merge all MCP configurations
+/// Load MCP configurations from mcp.json files only
 /// 
 /// Priority (highest to lowest):
 /// 1. Local project config (./.localm/mcp.json)
 /// 2. Global config (~/.localm/mcp.json)
-/// 3. Built-in presets
+/// 
+/// Note: Presets are NOT automatically loaded. Use get_available_presets() 
+/// to show preset suggestions in UI.
 pub async fn load_effective_config() -> Vec<McpServerConfig> {
     let mut config_map: HashMap<String, McpServerConfig> = HashMap::new();
 
-    // 1. Load Presets
-    tracing::debug!("Loading MCP presets...");
-    for preset in get_all_presets() {
-        config_map.insert(preset.id.clone(), preset.config);
-    }
-
-    // 2. Load Global Config
+    // 1. Load Global Config
     if let Ok(data_dir) = get_data_dir() {
         let global_config_path = data_dir.join("mcp.json");
         if let Some(configs) = load_config_from_file(&global_config_path).await {
@@ -58,7 +55,7 @@ pub async fn load_effective_config() -> Vec<McpServerConfig> {
         }
     }
 
-    // 3. Load Local Config (current directory)
+    // 2. Load Local Config (current directory)
     // We look for .localm/mcp.json in the current working directory
     let local_config_path = PathBuf::from(".localm").join("mcp.json");
     if let Some(configs) = load_config_from_file(&local_config_path).await {
@@ -68,6 +65,14 @@ pub async fn load_effective_config() -> Vec<McpServerConfig> {
 
     // Convert map back to vector
     config_map.into_values().collect()
+}
+
+/// Get available preset configurations (for UI suggestions)
+pub fn get_available_presets() -> Vec<McpServerConfig> {
+    crate::agent::tools::mcp_presets::get_all_presets()
+        .into_iter()
+        .map(|p| p.config)
+        .collect()
 }
 
 /// Merge new configs into the map, overriding existing ones with same ID

@@ -11,6 +11,7 @@ use dioxus::prelude::*;
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
 use tokio::sync::Mutex;
+use crate::ui::chat::message::Message;
 
 /// Represents the current state of the model
 #[derive(Clone, PartialEq, Debug)]
@@ -31,6 +32,10 @@ pub struct AppState {
     pub settings: Signal<AppSettings>,
     pub model_state: Signal<ModelState>,
     pub stop_signal: Arc<AtomicBool>,
+    /// Global generation flag - generation continues even when navigating away
+    pub is_generating: Signal<bool>,
+    /// Active messages buffer - persists across navigation
+    pub active_messages: Signal<Vec<Message>>,
 }
 
 impl AppState {
@@ -48,6 +53,8 @@ impl AppState {
             settings: Signal::new(settings),
             model_state: Signal::new(ModelState::NotLoaded),
             stop_signal: Arc::new(AtomicBool::new(false)),
+            is_generating: Signal::new(false),
+            active_messages: Signal::new(Vec::new()),
         }
     }
 }

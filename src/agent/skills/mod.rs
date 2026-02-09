@@ -2,8 +2,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::path::PathBuf;
-use std::sync::Arc;
 use crate::agent::tools::{Tool, ToolResult, ToolError};
+use tokio::process::Command;
 
 pub mod loader;
 pub mod registry;
@@ -51,6 +51,131 @@ impl Tool for SkillTool {
     }
 
     async fn execute(&self, _params: Value) -> Result<ToolResult, ToolError> {
+        // Check for executable files in the skill directory
+        let executables = ["main.py", "index.js", "run.sh", "run.py", "main.ts"];
+        
+        tracing::info!("Skill '{}' path: {}", self.skill.name, self.skill.path.display());
+        
+        for exe in executables {
+            // skill.path is now the skill directory directly (absolute path)
+            let exe_path = self.skill.path.join(exe);
+            if exe_path.exists() {
+                tracing::info!("Executing skill script: {}", exe_path.display());
+                
+                let mut cmd = if exe.ends_with(".py") {
+                    // Try to find a working Python interpreter
+                    // On Windows, 'python' may be a Windows Store stub that fails
+                    // We try multiple options and use the first that works
+                    let python_variants = if cfg!(windows) {
+                        vec!["python", "python3", "py"]
+                    } else {
+                        vec!["python3", "python"]
+                    };
+                    
+                    let mut working_cmd = None;
+                    for py in &python_variants {
+                        // Quick test: try to run python --version
+                        let test_result = std::process::Command::new(py)
+                            .arg("--version")
+                            .output();
+                        
+                        if let Ok(output) = test_result {
+                            if output.status.success() {
+                                tracing::debug!("Found working Python: {}", py);
+                                let mut c = Command::new(*py);
+                                c.arg(&exe_path);
+                                working_cmd = Some(c);
+                                break;
+                            }
+                        }
+                    }
+                    
+                    working_cmd.unwrap_or_else(|| {
+                        tracing::warn!("No working Python found, falling back to 'python'");
+                        let mut c = Command::new("python");
+                        c.arg(&exe_path);
+                        c
+                    })
+                } else if exe.ends_with(".js") {
+                    let mut c = Command::new("node");
+                    c.arg(&exe_path);
+                    c
+                } else if exe.ends_with(".ts") {
+                    let mut c = Command::new("ts-node");
+                    c.arg(&exe_path);
+                    c
+                } else {
+                    let mut c = Command::new("bash");
+                    c.arg(&exe_path);
+                    c
+                };
+                
+                // Set working directory to skill folder
+                if let Some(parent) = exe_path.parent() {
+                    cmd.current_dir(parent);
+                }
+                
+                match cmd.output().await {
+                    Ok(output) => {
+                        let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+                        let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+                        let success = output.status.success();
+                        let exit_code = output.status.code();
+                        
+                        // Debug logging
+                        tracing::debug!(
+                            "Skill '{}' finished: success={}, exit_code={:?}, stdout_len={}, stderr_len={}",
+                            self.skill.name, success, exit_code, stdout.len(), stderr.len()
+                        );
+                        if !stderr.is_empty() {
+                            tracing::warn!("Skill '{}' stderr: {}", self.skill.name, stderr);
+                        }
+                        tracing::info!("Skill '{}' stdout: {}", self.skill.name, stdout.trim());
+                        
+                        // Clear, structured output format for AI consumption
+                        let result_message = if success {
+                            if stderr.is_empty() {
+                                format!(
+                                    "✅ SKILL '{}' EXECUTED SUCCESSFULLY\n\n=== OUTPUT ===\n{}\n=== END OUTPUT ===",
+                                    self.skill.name,
+                                    stdout.trim()
+                                )
+                            } else {
+                                format!(
+                                    "✅ SKILL '{}' EXECUTED (with warnings)\n\n=== OUTPUT ===\n{}\n=== WARNINGS ===\n{}\n=== END ===",
+                                    self.skill.name,
+                                    stdout.trim(),
+                                    stderr.trim()
+                                )
+                            }
+                        } else {
+                            format!(
+                                "❌ SKILL '{}' FAILED\n\n=== ERROR ===\n{}\n=== OUTPUT (partial) ===\n{}\n=== END ===",
+                                self.skill.name,
+                                stderr.trim(),
+                                stdout.trim()
+                            )
+                        };
+                        
+                        return Ok(ToolResult {
+                            success,
+                            data: serde_json::json!({
+                                "skill_name": self.skill.name,
+                                "stdout": stdout,
+                                "stderr": stderr,
+                                "exit_code": output.status.code()
+                            }),
+                            message: result_message,
+                        });
+                    },
+                    Err(e) => {
+                        return Err(ToolError::ExecutionFailed(format!("Failed to execute skill script: {}", e)));
+                    }
+                }
+            }
+        }
+        
+        // Fallback: just return instructions if no executable found
         Ok(ToolResult {
             success: true,
             data: serde_json::json!({

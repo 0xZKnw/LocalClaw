@@ -208,6 +208,45 @@ impl LlamaEngine {
         Ok(())
     }
 
+    pub async fn load_model_async<P: AsRef<Path>>(
+        &mut self,
+        path: P,
+        gpu_layers: u32,
+    ) -> Result<LoadedModelInfo, EngineError> {
+        let command_tx = self
+            .command_tx
+            .as_ref()
+            .ok_or(EngineError::BackendNotInitialized)?
+            .clone();
+
+        let path = path.as_ref().to_path_buf();
+        let _metadata = validate_gguf(&path)?;
+
+        let (response_tx, response_rx) = mpsc::channel();
+
+        command_tx
+            .send(WorkerCommand::LoadModel {
+                path,
+                gpu_layers,
+                response_tx,
+            })
+            .map_err(|e| EngineError::WorkerError(e.to_string()))?;
+
+        // Use spawn_blocking to not block the async runtime
+        let result = tokio::task::spawn_blocking(move || {
+            response_rx.recv()
+        })
+        .await
+        .map_err(|e| EngineError::WorkerError(format!("Task join error: {}", e)))?
+        .map_err(|e| EngineError::WorkerError(e.to_string()))??;
+
+        self.model_info = Some(result.clone());
+        self.model_loaded = true;
+
+        Ok(result)
+    }
+
+    /// Synchronous version for backward compatibility (blocks!)
     pub fn load_model<P: AsRef<Path>>(
         &mut self,
         path: P,

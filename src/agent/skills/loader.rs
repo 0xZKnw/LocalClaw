@@ -47,7 +47,9 @@ impl SkillLoader {
                 // Check for SKILL.md inside
                 let skill_file = entry_path.join("SKILL.md");
                 if skill_file.exists() {
-                    match Self::load_skill_file(&skill_file).await {
+                    // Convert to absolute path to avoid CWD issues
+                    let abs_skill_dir = std::fs::canonicalize(&entry_path).unwrap_or_else(|_| entry_path.clone());
+                    match Self::load_skill_file(&skill_file, abs_skill_dir).await {
                         Ok(skill) => skills.push(skill),
                         Err(e) => tracing::warn!("Failed to load skill from {}: {}", skill_file.display(), e),
                     }
@@ -59,16 +61,18 @@ impl SkillLoader {
     }
 
     /// Load a single skill file
-    async fn load_skill_file(path: &Path) -> Result<Skill, SkillError> {
-        let content = fs::read_to_string(path).await?;
-        parse_skill(&content, path.to_path_buf())
+    /// skill_file_path: path to SKILL.md
+    /// skill_dir_path: path to the skill directory (for storing in Skill.path)
+    async fn load_skill_file(skill_file_path: &Path, skill_dir_path: PathBuf) -> Result<Skill, SkillError> {
+        let content = fs::read_to_string(skill_file_path).await?;
+        parse_skill(&content, skill_dir_path)
     }
 
     /// Get the global skills directory based on OS
     fn get_global_skills_dir() -> Option<PathBuf> {
         // Use directories crate to find standard data dir
         if let Some(proj_dirs) = directories::ProjectDirs::from("com", "LocaLM", "LocaLM") {
-            let data_dir = proj_dirs.data_dir();
+            let _data_dir = proj_dirs.data_dir();
             // Windows: %APPDATA%/LocaLM/skills
             // Linux: ~/.local/share/LocaLM/skills
             // macOS: ~/Library/Application Support/LocaLM/skills

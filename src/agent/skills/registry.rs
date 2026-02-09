@@ -25,6 +25,11 @@ impl SkillRegistry {
         self.skills.get(name).map(|r| r.value().clone())
     }
 
+    /// Remove a skill from the registry
+    pub fn remove(&self, name: &str) {
+        self.skills.remove(name);
+    }
+    
     /// List all skills
     pub fn list(&self) -> Vec<Skill> {
         self.skills.iter().map(|r| r.value().clone()).collect()
@@ -36,6 +41,24 @@ impl SkillRegistry {
             let tool = SkillTool::new(skill.value().clone());
             tool_registry.register(Arc::new(tool)).await;
         }
+    }
+    /// Load skills from disk and register them in both SkillRegistry and ToolRegistry
+    pub async fn load_and_register_all(&self, tool_registry: &ToolRegistry) {
+        use crate::agent::skills::loader::SkillLoader;
+        
+        tracing::info!("Reloading skills from disk...");
+        let skills = SkillLoader::load_all().await;
+        
+        for skill in skills {
+            // Register in internal map
+            self.register(skill.clone()).await;
+            
+            // Register as tool
+            let tool = SkillTool::new(skill);
+            tool_registry.register(Arc::new(tool)).await;
+        }
+        
+        tracing::info!("Skills reloaded successfully");
     }
 }
 

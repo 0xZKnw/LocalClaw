@@ -4,6 +4,7 @@ pub mod appearance;
 pub mod hardware;
 pub mod inference;
 pub mod tools;
+pub mod skills;
 pub mod mcp;
 
 use crate::app::AppState;
@@ -11,6 +12,7 @@ use crate::ui::settings::appearance::AppearanceSettings;
 use crate::ui::settings::hardware::HardwareSettings;
 use crate::ui::settings::inference::InferenceSettings;
 use crate::ui::settings::tools::ToolsSettings;
+use crate::ui::settings::skills::SkillsSettings;
 use crate::ui::settings::mcp::McpSettings;
 use dioxus::prelude::*;
 
@@ -19,6 +21,7 @@ enum SettingsTab {
     Inference,
     Hardware,
     Tools,
+    Skills,
     Mcp,
     Appearance,
 }
@@ -60,6 +63,11 @@ pub fn Settings() -> Element {
                             label: if is_en { "Tools" } else { "Outils" },
                         }
                         TabButton {
+                            active: active_tab() == SettingsTab::Skills,
+                            onclick: move |_| active_tab.set(SettingsTab::Skills),
+                            label: "Skills",
+                        }
+                        TabButton {
                             active: active_tab() == SettingsTab::Mcp,
                             onclick: move |_| active_tab.set(SettingsTab::Mcp),
                             label: "MCP",
@@ -80,6 +88,7 @@ pub fn Settings() -> Element {
                     SettingsTab::Inference => rsx! { InferenceSettings {} },
                     SettingsTab::Hardware => rsx! { HardwareSettings {} },
                     SettingsTab::Tools => rsx! { ToolsSettings {} },
+                    SettingsTab::Skills => rsx! { SkillsSettings {} },
                     SettingsTab::Mcp => rsx! { McpSettings {} },
                     SettingsTab::Appearance => rsx! { AppearanceSettings {} },
                 }

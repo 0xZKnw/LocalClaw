@@ -51,6 +51,9 @@ pub struct AppSettings {
     /// List of disabled MCP server IDs
     #[serde(default)]
     pub disabled_mcp_servers: Vec<String>,
+    /// OpenRouter model to use for ai_consult tool (default: openrouter/pony-alpha)
+    #[serde(default = "default_openrouter_model")]
+    pub openrouter_model: String,
 }
 
 fn default_auto_load() -> bool {
@@ -59,6 +62,10 @@ fn default_auto_load() -> bool {
 
 fn default_language() -> String {
     "fr".to_string()
+}
+
+fn default_openrouter_model() -> String {
+    "openrouter/pony-alpha".to_string()
 }
 
 /// Default system prompt from code. Used on every app load so the prompt always matches the code.
@@ -151,7 +158,16 @@ Execute a shell command.{cmd_info}
 5. **Be concise.** Give direct, useful answers. No unnecessary preamble.
 6. **Handle errors.** If a tool fails, try an alternative approach.
 7. **Think internally.** Use <think>...</think> for your reasoning. The user sees it as a collapsible block.
-8. **{response_lang}**"#,
+8. **{response_lang}**
+
+## ⚠️ MANDATORY VERIFICATION (ANTI-HALLUCINATION)
+
+**CRITICAL RULES:**
+- NEVER say "done" or "file created" BEFORE receiving system confirmation
+- AFTER each creation/modification, VERIFY with file_list or file_read that it actually exists
+- If you haven't seen "[TOOL_RESULT]" or a system result, the tool was NOT executed
+- NEVER generate fake tool results - the SYSTEM executes them, not you
+- If you need to confirm an action, USE a verification tool FIRST"#,
         response_lang = response_lang_instruction,
         os_name = os_name,
         arch = std::env::consts::ARCH,
@@ -185,6 +201,7 @@ impl Default for AppSettings {
             auto_approve_all_tools: false,
             tool_allowlist: Vec::new(),
             disabled_mcp_servers: Vec::new(),
+            openrouter_model: default_openrouter_model(),
         }
     }
 }

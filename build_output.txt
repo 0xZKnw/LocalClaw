@@ -1,4 +1,0 @@
-Microsoft Windows [Version 10.0.26200.7705]
-(c) Microsoft Corporation. All rights reserved.
-
-C:\Users\crist\Desktop\LocaLM>

@@ -1,11 +1,79 @@
 use async_trait::async_trait;
 use serde_json::Value;
 use std::path::PathBuf;
+use std::sync::Arc;
 use regex::Regex;
-use crate::agent::tools::{Tool, ToolResult, ToolError};
+use crate::agent::tools::{Tool, ToolResult, ToolError, ToolRegistry};
+use crate::agent::skills::SkillRegistry;
 use crate::storage::get_data_dir;
 
-pub struct SkillCreateTool;
+pub struct SkillCreateTool {
+    skill_registry: Arc<SkillRegistry>,
+    tool_registry: Arc<ToolRegistry>,
+}
+
+impl SkillCreateTool {
+    pub fn new(skill_registry: Arc<SkillRegistry>, tool_registry: Arc<ToolRegistry>) -> Self {
+        Self {
+            skill_registry,
+            tool_registry,
+        }
+    }
+    
+    /// Inject UTF-8 encoding fix for Python scripts on Windows
+    fn inject_utf8_fix(content: &str) -> String {
+        // Check if the script already has UTF-8 handling
+        if content.contains("reconfigure(encoding") || content.contains("# -*- coding: utf-8 -*-") {
+            return content.to_string();
+        }
+        
+        // UTF-8 fix to inject after imports
+        let utf8_fix = r#"
+# UTF-8 encoding fix for Windows console
+import sys
+if sys.platform == 'win32':
+    import io
+    sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding='utf-8', errors='replace')
+    sys.stderr = io.TextIOWrapper(sys.stderr.buffer, encoding='utf-8', errors='replace')
+
+"#;
+        
+        // Find where to inject: after all import statements
+        let lines: Vec<&str> = content.lines().collect();
+        let mut insert_pos = 0;
+        let mut found_imports = false;
+        
+        for (i, line) in lines.iter().enumerate() {
+            let trimmed = line.trim();
+            if trimmed.starts_with("import ") || trimmed.starts_with("from ") {
+                found_imports = true;
+                insert_pos = i + 1;
+            } else if found_imports && !trimmed.is_empty() && !trimmed.starts_with('#') {
+                // Found non-import, non-comment, non-empty line after imports
+                break;
+            }
+        }
+        
+        // Reconstruct with UTF-8 fix injected
+        let mut result = String::new();
+        for (i, line) in lines.iter().enumerate() {
+            if i == insert_pos && found_imports {
+                result.push_str(utf8_fix);
+            }
+            result.push_str(line);
+            result.push('\n');
+        }
+        
+        // If no imports found, prepend the fix
+        if !found_imports {
+            let mut new_result = utf8_fix.to_string();
+            new_result.push_str(content);
+            return new_result;
+        }
+        
+        result
+    }
+}
 
 #[async_trait]
 impl Tool for SkillCreateTool {
@@ -31,7 +99,12 @@ impl Tool for SkillCreateTool {
                 },
                 "content": {
                     "type": "string",
-                    "description": "Markdown instructions for the skill"
+                    "description": "Markdown instructions for the AI. MUST contain actionable steps. If providing 'files' (e.g. python scripts), explain here how to run them (e.g. 'Run python script.py')."
+                },
+                "files": {
+                    "type": "object",
+                    "additionalProperties": { "type": "string" },
+                    "description": "Optional map of filenames to content (e.g. {'script.py': 'print(\"hello\")'}). Create Python scripts here to handle complex logic."
                 },
                 "is_global": {
                     "type": "boolean",
@@ -73,6 +146,21 @@ impl Tool for SkillCreateTool {
         let is_global = params["is_global"].as_bool().unwrap_or(false);
         let disable_auto_invoke = params["disable_auto_invoke"].as_bool().unwrap_or(false);
         let allowed_tools = params["allowed_tools"].as_array();
+        let files = params["files"].as_object()
+            .ok_or_else(|| {
+                tracing::error!("skill_create: files parameter is missing");
+                ToolError::InvalidParameters("You MUST provide a 'files' object containing an executable script (e.g., 'main.py')".to_string())
+            })?;
+
+        // Enforce executable presence
+        let valid_extensions = [".py", ".js", ".ts", ".sh"];
+        let has_executable = files.keys().any(|k| valid_extensions.iter().any(|ext| k.ends_with(ext)));
+        
+        if !has_executable {
+             return Err(ToolError::InvalidParameters(
+                format!("Skill must contain an executable file ending in: {:?}", valid_extensions)
+            ));
+        }
 
         // Validate name
         let name_regex = Regex::new(r"^[a-zA-Z0-9-]+$").map_err(|e| {
@@ -128,14 +216,44 @@ impl Tool for SkillCreateTool {
 
         let file_path = skill_dir.join("SKILL.md");
         
-        // Write file
+        // Write SKILL.md
         tokio::fs::write(&file_path, frontmatter).await
             .map_err(|e| {
                 tracing::error!("skill_create: failed to write file {}: {}", file_path.display(), e);
                 ToolError::ExecutionFailed(format!("Failed to write file {}: {}", file_path.display(), e))
             })?;
 
+        // Write additional files
+        for (filename, content_val) in files {
+            if let Some(content_str) = content_val.as_str() {
+                // Validate filename
+                if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
+                    tracing::warn!("skill_create: invalid filename '{}' skipped for security (no paths allowed)", filename);
+                    continue;
+                }
+                
+                // Inject UTF-8 fix for Python files on Windows
+                let final_content = if filename.ends_with(".py") {
+                    Self::inject_utf8_fix(content_str)
+                } else {
+                    content_str.to_string()
+                };
+                
+                let extra_file_path = skill_dir.join(filename);
+                tokio::fs::write(&extra_file_path, final_content).await
+                    .map_err(|e| {
+                        tracing::error!("skill_create: failed to write extra file {}: {}", extra_file_path.display(), e);
+                        ToolError::ExecutionFailed(format!("Failed to write extra file {}: {}", extra_file_path.display(), e))
+                    })?;
+                tracing::info!("Created extra file: {}", extra_file_path.display());
+            }
+        }
+
         tracing::info!("Skill '{}' created successfully at {}", name, file_path.display());
+
+        // Refresh skills
+        self.skill_registry.load_and_register_all(&self.tool_registry).await;
+        tracing::info!("Skills reloaded");
 
         Ok(ToolResult {
             success: true,
@@ -144,7 +262,7 @@ impl Tool for SkillCreateTool {
                 "name": name,
                 "is_global": is_global
             }),
-            message: format!("Skill '{}' created successfully at {}", name, file_path.display()),
+            message: format!("Skill '{}' created successfully at {}. Skills reloaded.", name, file_path.display()),
         })
     }
 }

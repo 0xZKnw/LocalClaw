@@ -459,7 +459,7 @@ impl Tool for PdfMergeTool {
             ToolError::ExecutionFailed(format!("Erreur lecture {}: {}", input_files[0], e))
         })?;
 
-        let mut total_pages = merged_doc.get_pages().len();
+        let total_pages = merged_doc.get_pages().len();
 
         // Merge other documents
         for input_file in input_files.iter().skip(1) {
@@ -467,7 +467,7 @@ impl Tool for PdfMergeTool {
                 ToolError::ExecutionFailed(format!("Erreur lecture {}: {}", input_file, e))
             })?;
             
-            let other_pages = other_doc.get_pages().len();
+            let _other_pages = other_doc.get_pages().len();
             
             // Note: lopdf doesn't have merge_pages built-in
             // Return an error - users should use pdf_create instead

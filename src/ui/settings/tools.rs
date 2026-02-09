@@ -61,6 +61,7 @@ const TOOL_GROUPS: &[(&str, &[&str], &str, &str)] = &[
             "web_fetch",
             "web_download",
             "web_crawl",
+            "ai_consult",
         ],
         "🌐",
         "moderate",
@@ -109,6 +110,74 @@ pub fn ToolsSettings() -> Element {
     rsx! {
         div {
             class: "space-y-6 max-w-3xl mx-auto animate-fade-in-up pb-8",
+
+            // OpenRouter model selector
+            div {
+                class: "p-5 rounded-2xl glass-md",
+
+                h3 {
+                    class: "text-base font-semibold mb-1 text-[var(--text-primary)]",
+                    "🤖 OpenRouter AI"
+                }
+                p {
+                    class: "text-xs text-[var(--text-tertiary)] mb-5",
+                    if is_en {
+                        "Model to use when the AI consults a more powerful external model via the ai_consult tool."
+                    } else {
+                        "Modèle à utiliser lorsque l'IA consulte un modèle externe plus puissant via l'outil ai_consult."
+                    }
+                }
+
+                div {
+                    class: "flex flex-col gap-3",
+
+                    // Model dropdown
+                    div {
+                        class: "flex items-center gap-4",
+                        label {
+                            class: "text-sm text-[var(--text-secondary)] w-32",
+                            if is_en { "Model" } else { "Modèle" }
+                        }
+                        {
+                            let current_model = settings.openrouter_model.clone();
+                            let mut app_state_model = app_state.clone();
+                            rsx! {
+                                select {
+                                    class: "flex-1 px-3 py-2 rounded-lg text-sm text-[var(--text-primary)] bg-[var(--bg-secondary)] border border-[var(--border-subtle)] focus:outline-none focus:border-[var(--accent-primary)]",
+                                    value: "{current_model}",
+                                    onchange: move |e: Event<FormData>| {
+                                        let mut settings = app_state_model.settings.write();
+                                        settings.openrouter_model = e.value().to_string();
+                                        if let Err(e) = save_settings(&settings) {
+                                            tracing::error!("Failed to save settings: {}", e);
+                                        }
+                                    },
+                                    option { value: "openrouter/pony-alpha", "Pony Alpha (OpenRouter)" }
+                                    option { value: "nousresearch/deephermes-3-llama-3-8b-preview:free", "DeepHermes 3 8B (Free)" }
+                                    option { value: "google/gemma-2-9b-it:free", "Gemma 2 9B (Free)" }
+                                    option { value: "meta-llama/llama-3.2-3b-instruct:free", "Llama 3.2 3B (Free)" }
+                                    option { value: "google/gemini-2.0-flash-exp:free", "Gemini 2.0 Flash (Free)" }
+                                    option { value: "anthropic/claude-3.5-sonnet", "Claude 3.5 Sonnet ($)" }
+                                    option { value: "openai/gpt-4o", "GPT-4o ($)" }
+                                    option { value: "openai/gpt-4o-mini", "GPT-4o Mini ($)" }
+                                    option { value: "deepseek/deepseek-chat", "DeepSeek V3 ($)" }
+                                }
+                            }
+                        }
+                    }
+
+                    // API key info
+                    div {
+                        class: "flex items-center gap-2 text-xs text-[var(--text-tertiary)]",
+                        span { "💡" }
+                        if is_en {
+                            "Set OPENROUTER_API_KEY environment variable. Get a free key at openrouter.ai/keys"
+                        } else {
+                            "Définir la variable d'environnement OPENROUTER_API_KEY. Clé gratuite sur openrouter.ai/keys"
+                        }
+                    }
+                }
+            }
 
             // Auto-approve ALL toggle
             div {

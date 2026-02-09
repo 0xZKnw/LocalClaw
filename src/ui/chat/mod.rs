@@ -86,6 +86,7 @@ fn is_garbage_text(content: &str) -> bool {
 }
 
 /// Estimate token count from message content (~4 chars per token)
+#[allow(dead_code)]
 fn estimate_tokens(messages: &[Message]) -> usize {
     messages.iter().map(|m| m.content.len() / 4).sum()
 }
@@ -94,19 +95,31 @@ fn estimate_tokens(messages: &[Message]) -> usize {
 pub fn ChatView() -> Element {
     let app_state = use_context::<AppState>();
     
-    // State for messages - will be populated from current_conversation
-    let messages = use_signal(Vec::<Message>::new);
+    // State for messages - now persistent in AppState
+    let messages = app_state.active_messages;
     
-    // State for generation status
-    let is_generating = use_signal(|| false);
+    // Use GLOBAL is_generating from AppState so generation persists across navigation
+    // Also keep a local copy for component reactivity
+    let is_generating = app_state.is_generating;
+    
+    // Track last save time for periodic saves
+    let last_save_time = use_signal(|| Instant::now());
     
     // Load messages when current_conversation changes
     {
         let mut messages = messages.clone();
         let current_conv = app_state.current_conversation.clone();
+        let is_generating = is_generating.clone();
+        
         use_effect(move || {
             let conv_read = current_conv.read();
             if let Some(ref conv) = *conv_read {
+                // If we are currently generating, do NOT overwrite the active messages
+                // This persists the stream even if we navigate away and back
+                if *is_generating.read() {
+                    return;
+                }
+
                 if conv.messages.is_empty() {
                     // New conversation - start empty (no greeting)
                     messages.set(vec![]);
@@ -125,8 +138,8 @@ pub fn ChatView() -> Element {
     // Handler for sending a message
     let handle_send = {
         let mut messages = messages.clone();
-        let mut is_generating = is_generating.clone();
-        let app_state = app_state.clone();
+        let _is_generating = is_generating.clone();
+        let mut app_state = app_state.clone();
         move |text: String| {
             if !matches!(*app_state.model_state.read(), ModelState::Loaded(_)) {
                 messages.write().push(Message {
@@ -149,11 +162,11 @@ pub fn ChatView() -> Element {
             });
 
             app_state.stop_signal.store(false, Ordering::Relaxed);
-            is_generating.set(true);
+            app_state.is_generating.set(true);
 
             let mut messages = messages.clone();
-            let mut is_generating = is_generating.clone();
             let mut app_state = app_state.clone();
+            let mut last_save_time = last_save_time.clone();
 
             spawn(async move {
                 // Initialize agent context for this run
@@ -405,6 +418,23 @@ pub fn ChatView() -> Element {
                         if !stream_done && !got_any {
                             // No tokens available, yield briefly
                             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+                            
+                            // Periodic save during generation (every 3 seconds)
+                            if last_save_time.read().elapsed().as_secs() >= 3 {
+                                let msgs = messages.read();
+                                let storage_messages: Vec<StorageMessage> = msgs.iter()
+                                    .cloned()
+                                    .map(|m| m.into())
+                                    .collect();
+                                
+                                let mut conv_write = app_state.current_conversation.write();
+                                if let Some(ref mut conv) = *conv_write {
+                                    conv.messages = storage_messages;
+                                    let _ = save_conversation(conv);
+                                }
+                                drop(conv_write);
+                                last_save_time.set(Instant::now());
+                            }
                         }
                     }
 
@@ -934,7 +964,7 @@ pub fn ChatView() -> Element {
                     }
                 }
 
-                is_generating.set(false);
+                app_state.is_generating.set(false);
 
                 {
                     let mut msgs = messages.write();
@@ -969,11 +999,10 @@ pub fn ChatView() -> Element {
 
     // Handler for stopping generation
     let handle_stop = {
-        let mut is_generating = is_generating.clone();
-        let app_state = app_state.clone();
+        let mut app_state = app_state.clone();
         move |_| {
             app_state.stop_signal.store(true, Ordering::Relaxed);
-            is_generating.set(false);
+            app_state.is_generating.set(false);
         }
     };
 

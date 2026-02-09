@@ -87,7 +87,7 @@ impl Tool for BashTool {
         // Execute with timeout
         let result = timeout(Duration::from_secs(timeout_secs), async {
             let mut child = cmd.spawn().map_err(|e| {
-                ToolError::ExecutionFailed(format!("Impossible de lancer la commande: {}", e))
+                ToolError::ExecutionFailed(format!("Failed to launch command: {}", e))
             })?;
 
             if let Some(input) = stdin_input {
@@ -101,7 +101,7 @@ impl Tool for BashTool {
             child
                 .wait_with_output()
                 .await
-                .map_err(|e| ToolError::ExecutionFailed(format!("Erreur d'exécution: {}", e)))
+                .map_err(|e| ToolError::ExecutionFailed(format!("Execution error: {}", e)))
         })
         .await;
 
@@ -124,9 +124,9 @@ impl Tool for BashTool {
                         "command": command_str
                     }),
                     message: if output.status.success() {
-                        format!("Commande exécutée (code: {})", exit_code)
+                        format!("Command executed (code: {})", exit_code)
                     } else {
-                        format!("Commande échouée (code: {})", exit_code)
+                        format!("Command failed (code: {})", exit_code)
                     },
                 })
             }
@@ -195,7 +195,7 @@ impl Tool for BashBackgroundTool {
         cmd.stderr(std::process::Stdio::null());
 
         let child = cmd.spawn().map_err(|e| {
-            ToolError::ExecutionFailed(format!("Impossible de lancer la commande: {}", e))
+            ToolError::ExecutionFailed(format!("Failed to launch command: {}", e))
         })?;
 
         let pid = child.id().unwrap_or(0);
@@ -207,7 +207,7 @@ impl Tool for BashBackgroundTool {
                 "command": command_str,
                 "status": "running"
             }),
-            message: format!("Commande lancée en arrière-plan (PID: {})", pid),
+            message: format!("Command started in background (PID: {})", pid),
         })
     }
 }
@@ -224,7 +224,7 @@ fn truncate_output(output: &str, max_chars: usize) -> String {
         let start = &output[..half];
         let end = &output[output.len() - half..];
         format!(
-            "{}\n\n... [tronqué, {} caractères omis] ...\n\n{}",
+            "{}\n\n... [truncated, {} characters omitted] ...\n\n{}",
             start,
             output.len() - max_chars,
             end

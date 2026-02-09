@@ -86,7 +86,7 @@ fn HeaderModelPicker() -> Element {
                         return app_state.model_state.set(ModelState::Error(e.to_string()));
                     }
                 }
-                engine.load_model(&path, gpu_layers)
+                engine.load_model_async(&path, gpu_layers).await
             };
             match result {
                 Ok(_) => app_state.model_state.set(ModelState::Loaded(path)),
