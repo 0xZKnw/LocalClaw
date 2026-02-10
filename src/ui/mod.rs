@@ -508,16 +508,16 @@ fn WelcomeScreen(on_prompt_click: EventHandler<String>) -> Element {
                         class: "font-bold tracking-tight mb-2",
                         style: "font-size: 3.5rem; letter-spacing: -0.04em; line-height: 1;",
 
-                        // "Loca" in primary text color
+                        // "Local" in primary text color
                         span {
                             class: "text-[var(--text-primary)]",
                             style: "font-weight: 300;",
-                            "Loca"
+                            "Local"
                         }
-                        // "LM" in accent color, heavier weight
+                        // "Claw" in accent color, heavier weight
                         span {
                             style: "color: var(--accent-primary); font-weight: 700;",
-                            "LM"
+                            "Claw"
                         }
                     }
 
