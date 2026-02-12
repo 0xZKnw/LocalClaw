@@ -26,10 +26,18 @@ jobs:
             target: x86_64-pc-windows-msvc
             artifact_name: clawrs-windows-x64-vulkan
             features: "--features vulkan"
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            artifact_name: clawrs-windows-x64-cuda
+            features: "--features cuda"
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: clawrs-linux-x64
             features: ""
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            artifact_name: clawrs-linux-x64-cuda
+            features: "--features cuda"
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: clawrs-macos-x64
