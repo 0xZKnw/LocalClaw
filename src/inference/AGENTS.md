@@ -43,3 +43,4 @@ Core LLM engine wrapping `llama-cpp-2`. Handles model loading, context managemen
 - **VRAM Awareness**: Model loading logic should verify VRAM availability before allocation.
 - **Error Propagation**: Use `?` operator to bubble up inference errors to the UI layer.
 - **Atomic Cancellation**: Generation can be interrupted via `AtomicBool` flags checked in the loop.
+- **Streaming**: Token-by-token output via mpsc channel to UI layer.

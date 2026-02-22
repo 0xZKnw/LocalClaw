@@ -36,6 +36,10 @@ pub trait Tool: Send + Sync {
 3. Register in `Agent::initialize_tools()` within `src/agent/mod.rs`.
 4. Map to appropriate `PermissionLevel` in `get_tool_permission()`.
 
+### Tool Directories
+- `src/agent/tools/*.rs`: Individual tool implementations
+- `src/agent/skills/`: Dynamic skill loader system
+
 ## LOOP STATES
 The `AgentLoop` follows a 9-state reasoning cycle:
 1. **Analyzing**: Initial request parsing.

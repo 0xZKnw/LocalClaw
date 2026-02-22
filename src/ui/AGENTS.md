@@ -10,8 +10,8 @@
 - `mod.rs`: Main layout (Sidebar + MainView), `HeaderModelPicker`, i18n helpers.
 - `chat/`: Chat interface, message streaming, markdown rendering.
 - `sidebar/`: Navigation, conversation history, model selector.
-- `settings/`: Multi-tab configuration (Inference, Hardware, Tools, UI).
-- `components/`: Reusable UI elements (PermissionDialog, Spinners, Monitoring).
+- `settings/`: Multi-tab configuration (Inference, Hardware, Tools, UI, Skills, MCP).
+- `components/`: Reusable UI elements (PermissionDialog, Spinners, Monitoring, ToolUsage).
 
 ## KEY PATTERNS
 

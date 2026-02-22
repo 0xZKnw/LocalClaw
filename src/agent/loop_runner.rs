@@ -80,6 +80,47 @@ pub enum AgentState {
     WaitingForUser,
 }
 
+/// Progress state for loop detection
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ProgressState {
+    /// Agent is making progress on the task
+    MakingProgress,
+    /// Agent is stuck in a loop
+    Stuck,
+    /// Agent is regressing (failures increasing)
+    Regressing,
+    /// Unknown progress state
+    Unknown,
+}
+
+/// Reason for anchoring a message - determines preservation priority
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum AnchorReason {
+    /// Initial user goal/request (highest priority - never dropped)
+    Goal,
+    /// Important decision made by the agent
+    Decision,
+    /// Error that was successfully fixed
+    ErrorFixed,
+    /// Successful tool execution with meaningful result
+    Success,
+    /// Important tool result to preserve
+    ToolResult,
+}
+
+/// Anchor message - critical information preserved during context compression
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct AnchorMessage {
+    /// The anchored content
+    pub content: String,
+    /// Reason for anchoring
+    pub reason: AnchorReason,
+    /// When this was anchored (elapsed nanoseconds from start)
+    pub timestamp: u64,
+    /// Iteration when this was anchored
+    pub iteration: usize,
+}
+
 /// Event emitted during agent execution
 #[derive(Clone, Debug, Serialize)]
 pub enum AgentEvent {
@@ -143,6 +184,18 @@ pub struct AgentContext {
     pub last_response: Option<String>,
     /// Detected patterns (for loop detection)
     pub detected_patterns: Vec<String>,
+    /// Number of successful tool executions
+    pub success_count: usize,
+    /// Number of failed tool executions
+    pub failure_count: usize,
+    /// Approaches attempted (for loop detection)
+    pub attempted_approaches: Vec<String>,
+    /// Number of iterations stuck in a loop
+    pub stuck_iterations: usize,
+    /// Current progress state
+    pub progress_state: ProgressState,
+    /// Anchor messages - critical info preserved during compression
+    pub anchor_messages: Vec<AnchorMessage>,
 }
 
 impl AgentContext {
@@ -158,6 +211,12 @@ impl AgentContext {
             thinking_log: Vec::new(),
             last_response: None,
             detected_patterns: Vec::new(),
+            success_count: 0,
+            failure_count: 0,
+            attempted_approaches: Vec::new(),
+            stuck_iterations: 0,
+            progress_state: ProgressState::Unknown,
+            anchor_messages: Vec::new(),
         }
     }
     
@@ -200,6 +259,29 @@ impl AgentContext {
             return true;
         }
         
+        // NEW: Check for repeated approach strings in tool results
+        if self.attempted_approaches.len() >= 3 {
+            let last_three_approaches: Vec<_> = self.attempted_approaches.iter().rev().take(3).collect();
+            if last_three_approaches.windows(2).all(|w| w[0] == w[1]) {
+                tracing::warn!("Stuck: repeated approach strings detected: {}", last_three_approaches[0]);
+                return true;
+            }
+        }
+        
+        // NEW: Check for progress regression (failures increasing, successes decreasing)
+        if self.iteration >= 5 && self.failure_count > 0 {
+            let total_attempts = self.success_count + self.failure_count;
+            if total_attempts >= 3 {
+                let failure_ratio = self.failure_count as f64 / total_attempts as f64;
+                // If more than 60% failures, consider it regressing
+                if failure_ratio > 0.6 {
+                    tracing::warn!("Stuck: progress regression detected ({} failures, {} successes)", 
+                        self.failure_count, self.success_count);
+                    return true;
+                }
+            }
+        }
+        
         false
     }
     
@@ -220,9 +302,159 @@ impl AgentContext {
         }
     }
     
+    /// Record an approach that was attempted (for loop detection)
+    pub fn record_approach(&mut self, approach: &str) {
+        let approach_str = approach.to_string();
+        // Keep only last 10 approaches to avoid unbounded growth
+        if self.attempted_approaches.len() >= 10 {
+            self.attempted_approaches.remove(0);
+        }
+        self.attempted_approaches.push(approach_str);
+    }
+    
+    /// Record a successful tool execution
+    pub fn record_success(&mut self) {
+        self.success_count += 1;
+        self.consecutive_errors = 0;
+        self.update_progress_state();
+    }
+    
+    /// Record a failed tool execution
+    pub fn record_failure(&mut self) {
+        self.failure_count += 1;
+        self.consecutive_errors += 1;
+        self.update_progress_state();
+    }
+    
+    /// Update progress state based on success/failure counts
+    fn update_progress_state(&mut self) {
+        if self.iteration < 2 {
+            self.progress_state = ProgressState::Unknown;
+            return;
+        }
+        
+        let total = self.success_count + self.failure_count;
+        if total == 0 {
+            self.progress_state = ProgressState::Unknown;
+            return;
+        }
+        
+        let failure_ratio = self.failure_count as f64 / total as f64;
+        
+        if failure_ratio > 0.6 {
+            self.progress_state = ProgressState::Regressing;
+        } else if failure_ratio < 0.4 {
+            self.progress_state = ProgressState::MakingProgress;
+        } else {
+            // Check if we're stuck in a loop
+            if self.is_stuck() {
+                self.progress_state = ProgressState::Stuck;
+            } else {
+                self.progress_state = ProgressState::Unknown;
+            }
+        }
+    }
+    
+    /// Check if we should force a summary response (stuck for 2+ iterations)
+    pub fn should_force_summarize(&self) -> bool {
+        // Check if stuck for 2 or more consecutive iterations
+        if self.stuck_iterations >= 2 {
+            tracing::warn!("Forcing summary after {} stuck iterations", self.stuck_iterations);
+            return true;
+        }
+        
+        // Also check for severe regression
+        if self.progress_state == ProgressState::Regressing && self.iteration >= 5 {
+            let total = self.success_count + self.failure_count;
+            if total >= 3 && self.failure_count >= 3 {
+                tracing::warn!("Forcing summary due to severe regression");
+                return true;
+            }
+        }
+        
+        false
+    }
+    
+    /// Update stuck iteration counter (call this each iteration)
+    pub fn update_stuck_counter(&mut self) {
+        if self.is_stuck() {
+            self.stuck_iterations += 1;
+        } else {
+            // Reset stuck counter if making progress
+            if self.progress_state == ProgressState::MakingProgress {
+                self.stuck_iterations = 0;
+            }
+        }
+    }
+    
     /// Get elapsed time
     pub fn elapsed(&self) -> Duration {
         self.start_time.elapsed()
+    }
+    
+    /// Add an anchor message for preservation during context compression
+    /// - First user message → ALWAYS anchor as Goal
+    /// - When tool succeeds → anchor as Success if meaningful result
+    /// - When error is fixed → anchor as ErrorFixed
+    /// - When agent makes decision → anchor as Decision
+    pub fn add_anchor(&mut self, content: String, reason: AnchorReason) {
+        let anchor = AnchorMessage {
+            content,
+            reason: reason.clone(),
+            timestamp: self.elapsed().as_nanos() as u64,
+            iteration: self.iteration,
+        };
+        
+        tracing::debug!("Adding anchor message: {:?}", reason);
+        
+        // Goal anchors are never dropped
+        if reason == AnchorReason::Goal {
+            self.anchor_messages.retain(|a| a.reason != AnchorReason::Goal);
+            self.anchor_messages.insert(0, anchor);
+            return;
+        }
+        
+        // Add the new anchor
+        self.anchor_messages.push(anchor);
+        
+        // Keep max 5 anchors, dropping oldest non-Goal anchors first
+        while self.anchor_messages.len() > 5 {
+            // Find the oldest non-Goal anchor to drop
+            if let Some(idx) = self.anchor_messages.iter()
+                .position(|a| a.reason != AnchorReason::Goal) 
+            {
+                self.anchor_messages.remove(idx);
+            } else {
+                // All anchors are Goal type, drop the oldest
+                self.anchor_messages.remove(0);
+                break;
+            }
+        }
+    }
+    
+    /// Get all anchors for preservation during context compression
+    pub fn get_anchors(&self) -> Vec<AnchorMessage> {
+        self.anchor_messages.clone()
+    }
+    
+    /// Check if a specific anchor should be preserved (not compressed)
+    /// Goal anchors are NEVER dropped
+    pub fn should_compress_anchor(&self, anchor: &AnchorMessage) -> bool {
+        // Goal anchors are never compressed
+        if anchor.reason == AnchorReason::Goal {
+            return false;
+        }
+        
+        // Check if we're at max capacity and this is an older non-Goal anchor
+        if self.anchor_messages.len() >= 5 {
+            // Keep recent anchors (within last 2 iterations)
+            let recent_threshold = self.iteration.saturating_sub(2);
+            if anchor.iteration < recent_threshold {
+                return true; // Should be compressed/dropped
+            }
+        }
+        
+        false
     }
 }
 
@@ -268,8 +500,12 @@ impl AgentLoop {
             if self.tool_registry.get(&tool_call.tool).is_some() {
                 return IterationResult::ToolCall(tool_call);
             } else {
-                // Unknown tool - might be a hallucination, continue
-                tracing::warn!("Unknown tool requested: {}", tool_call.tool);
+                // Unknown tool - return error instead of silently continuing
+                tracing::error!("Unknown tool requested: {} - this tool is not available", tool_call.tool);
+                return IterationResult::Error(format!(
+                    "Outil '{}' non disponible ou inconnu. Les outils disponibles sont: web_search, file_read, grep, etc.",
+                    tool_call.tool
+                ));
             }
         }
         

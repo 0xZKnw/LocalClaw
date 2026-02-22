@@ -6,6 +6,7 @@
 use crate::agent::loop_runner::AgentContext;
 use crate::agent::planning::TaskPlan;
 use crate::agent::tools::ToolInfo;
+use crate::types::message::{Message, Role};
 
 /// Build the complete system prompt with tool instructions and context
 pub fn build_agent_system_prompt(
@@ -552,6 +553,180 @@ The conversation context is nearly saturated. You must now create a concise summ
 5. Format: a dense paragraph of 200-400 words maximum
 
 **Respond ONLY with the summary, no introduction or conclusion.**"#.to_string()
+}
+
+/// Structured summary for incremental context compression
+/// Tracks accumulated information across conversation iterations
+#[derive(Debug, Clone)]
+pub struct ConversationSummary {
+    /// The accumulated summary from previous iterations
+    pub original_summary: String,
+    /// Last iteration when the summary was updated
+    pub last_update_iteration: usize,
+    /// Explicitly tracked key facts to preserve across compressions
+    pub key_facts: Vec<String>,
+    /// Current task context (original goal/objectives)
+    pub context: String,
+    /// Remaining tasks or next steps to complete
+    pub next_steps: Vec<String>,
+}
+
+impl ConversationSummary {
+    /// Create a new empty conversation summary
+    pub fn new() -> Self {
+        Self {
+            original_summary: String::new(),
+            last_update_iteration: 0,
+            key_facts: Vec::new(),
+            context: String::new(),
+            next_steps: Vec::new(),
+        }
+    }
+
+    /// Create a summary with initial context
+    pub fn with_context(context: String) -> Self {
+        Self {
+            original_summary: String::new(),
+            last_update_iteration: 0,
+            key_facts: Vec::new(),
+            context,
+            next_steps: Vec::new(),
+        }
+    }
+}
+
+impl Default for ConversationSummary {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+/// Build an incremental summary prompt that updates an existing summary
+/// This is more efficient than full re-summarization as it preserves context
+pub fn build_incremental_summary_prompt(
+    existing_summary: &ConversationSummary,
+    new_messages: &[Message],
+) -> String {
+    // Format the new messages for the prompt
+    let new_messages_text = new_messages
+        .iter()
+        .map(|msg| {
+            let role_str = match msg.role {
+                Role::User => "User",
+                Role::Assistant => "Assistant",
+                Role::System => "System",
+            };
+            format!("{}: {}", role_str, msg.content)
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    // Format key facts if any exist
+    let key_facts_text = if existing_summary.key_facts.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n### Key Facts to Preserve:\n{}\n",
+            existing_summary
+                .key_facts
+                .iter()
+                .map(|fact| format!("- {}", fact))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+
+    // Format next steps if any exist
+    let next_steps_text = if existing_summary.next_steps.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n### Remaining Tasks:\n{}\n",
+            existing_summary
+                .next_steps
+                .iter()
+                .map(|step| format!("- {}", step))
+                .collect::<Vec<_>>()
+                .join("\n")
+        )
+    };
+
+    format!(
+        r#"## INCREMENTAL SUMMARY UPDATE
+
+You must update an existing conversation summary by incorporating new messages.
+DO NOT re-summarize everything from scratch - only integrate new information.
+
+### Current Summary (iteration {}):
+{}
+
+### Original Task Context:
+{}
+
+### New Messages to Integrate:
+{}
+
+{}{}
+
+### Instructions:
+1. UPDATE the existing summary with new information from the messages above
+2. PRESERVE the original task context - do not lose sight of the original goal
+3. ADD any new actions taken and their outcomes to the summary
+4. UPDATE the key facts if new important information was discovered
+5. UPDATE remaining tasks if progress was made or new tasks emerged
+6. Keep the summary concise - 200-400 words maximum
+
+### Important:
+- Keep track of file paths, variable names, and important references
+- Note any errors encountered and how they were resolved
+- Preserve the narrative arc of what has been accomplished
+
+**Respond ONLY with the updated summary, no introduction or explanation.**"#,
+        existing_summary.last_update_iteration,
+        existing_summary.original_summary,
+        existing_summary.context,
+        new_messages_text,
+        key_facts_text,
+        next_steps_text
+    )
+}
+
+/// Build a compression summary prompt for emergency context reduction
+/// This is a simpler, more aggressive version for when context is critical
+pub fn build_compression_summary_prompt(messages: &[Message]) -> String {
+    // Format messages for the prompt
+    let messages_text = messages
+        .iter()
+        .map(|msg| {
+            let role_str = match msg.role {
+                Role::User => "User",
+                Role::Assistant => "Assistant",
+                Role::System => "System",
+            };
+            format!("{}: {}", role_str, msg.content)
+        })
+        .collect::<Vec<_>>()
+        .join("\n\n");
+
+    format!(
+        r#"## EMERGENCY CONTEXT COMPRESSION
+
+The conversation context is critically saturated. You must create an ultra-compact summary.
+This is a emergency compression - preserve ONLY the most essential information.
+
+### Conversation to Compress:
+{}
+
+### Instructions:
+1. Extract the SINGLE most important point or goal
+2. Note what has been ACCOMPLISHED vs what REMAINS
+3. Keep critical references (file paths, variable names) only if actively used
+4. Maximum 100 words - be brutal in what you discard
+5. Format: dense paragraph, no lists
+
+**Respond ONLY with the compressed summary.**"#,
+        messages_text
+    )
 }
 
 /// Build a conversation title generation prompt

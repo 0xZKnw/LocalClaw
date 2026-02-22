@@ -92,6 +92,291 @@ fn estimate_tokens(messages: &[Message]) -> usize {
     messages.iter().map(|m| m.content.len() / 4).sum()
 }
 
+// ============================================================================
+// 3-TIER HIERARCHICAL CONTEXT COMPRESSION (LoCoBench-Agent / Cursor pattern)
+// ============================================================================
+
+/// Context threshold for Working memory tier (40% of max context)
+/// At this tier, only selective pruning is applied (observation masking)
+pub const WORKING_THRESHOLD: f32 = 0.40;
+
+/// Context threshold for Compressed memory tier (60% of max context)
+/// At this tier, incremental summarization is applied
+pub const COMPRESSED_THRESHOLD: f32 = 0.60;
+
+/// Context threshold for Archived memory tier (80% of max context)
+/// At this tier, aggressive truncation keeping anchors + last 2 messages
+pub const ARCHIVED_THRESHOLD: f32 = 0.80;
+
+/// Compression tier based on context usage level
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum CompressionTier {
+    /// Working memory: 0-40% context used - selective pruning only
+    Working,
+    /// Compressed: 40-60% context used - incremental summarization
+    Compressed,
+    /// Archived: 60-80% context used - aggressive truncation
+    Archived,
+    /// Critical: >80% context - fallback to existing compression
+    Critical,
+}
+
+impl CompressionTier {
+    /// Get tier name for logging
+    pub fn name(&self) -> &'static str {
+        match self {
+            CompressionTier::Working => "Working",
+            CompressionTier::Compressed => "Compressed",
+            CompressionTier::Archived => "Archived",
+            CompressionTier::Critical => "Critical",
+        }
+    }
+}
+
+/// Determine the current compression tier based on context usage
+/// 
+/// # Arguments
+/// * `current_tokens` - Estimated current token count
+/// * `max_tokens` - Maximum available context tokens
+/// 
+/// # Returns
+/// The appropriate CompressionTier based on usage percentage
+pub fn get_compression_tier(current_tokens: usize, max_tokens: usize) -> CompressionTier {
+    if max_tokens == 0 {
+        return CompressionTier::Critical;
+    }
+    
+    let usage_ratio = current_tokens as f32 / max_tokens as f32;
+    
+    if usage_ratio <= WORKING_THRESHOLD {
+        CompressionTier::Working
+    } else if usage_ratio <= COMPRESSED_THRESHOLD {
+        CompressionTier::Compressed
+    } else if usage_ratio <= ARCHIVED_THRESHOLD {
+        CompressionTier::Archived
+    } else {
+        CompressionTier::Critical
+    }
+}
+
+/// Apply observation masking: Replace old tool results with brief placeholders
+/// This is a zero-cost operation (no LLM needed) that reduces context while
+/// preserving the fact that tools were executed.
+/// 
+/// # Arguments
+/// * `messages` - Mutable reference to message Vec
+/// * `keep_count` - Number of recent tool results to preserve (default: 3)
+/// 
+/// # Returns
+/// Number of characters saved by masking
+pub fn apply_observation_masking(messages: &mut Vec<Message>, keep_count: usize) -> usize {
+    let mut chars_saved = 0;
+    let mut tool_result_indices: Vec<(usize, String)> = Vec::new();
+    
+    // Find all tool result messages (typically system messages with tool output)
+    for (idx, msg) in messages.iter_mut().enumerate() {
+        let role = &msg.role;
+        let content = &msg.content;
+        
+        // Identify tool result messages - look for common tool prefixes
+        let is_tool_result = *role == MessageRole::System && (
+            content.contains("file_read") ||
+            content.contains("tool_result") ||
+            content.contains("executed:") ||
+            content.contains("Output:")
+        );
+        
+        if is_tool_result && content.len() > 150 {
+            // Extract tool name for placeholder
+            let tool_name = content.lines()
+                .next()
+                .unwrap_or("tool")
+                .split(':')
+                .next()
+                .unwrap_or("tool")
+                .trim()
+                .to_string();
+            
+            tool_result_indices.push((idx, tool_name));
+        }
+    }
+    
+    // Mask all but the most recent tool results
+    let preserve_count = keep_count.min(tool_result_indices.len());
+    for (idx, (_, tool_name)) in tool_result_indices.iter()
+        .rev()
+        .skip(preserve_count)
+        .enumerate()
+    {
+        let msg_idx = tool_result_indices[idx].0;
+        if let Some(msg) = messages.get_mut(msg_idx) {
+            let original_len = msg.content.len();
+            let placeholder = format!(
+                "[Tool result for {} omitted for brevity - see earlier context]",
+                tool_name
+            );
+            chars_saved += original_len - placeholder.len();
+            msg.content = placeholder;
+        }
+    }
+    
+    chars_saved
+}
+
+/// Apply hierarchical context compression based on the current tier
+/// 
+/// This implements the 3-tier approach from LoCoBench-Agent:
+/// - Working (0-40%): Selective pruning (observation masking)
+/// - Compressed (40-60%): Incremental summarization
+/// - Archived (60-80%): Aggressive truncation with anchors
+/// 
+/// # Arguments
+/// * `messages` - Mutable reference to message Vec
+/// * `current_tokens` - Estimated current token count
+/// * `max_tokens` - Maximum available context tokens
+/// * `anchor_messages` - Critical info to preserve from AgentContext
+/// 
+/// # Returns
+/// Tuple of (characters_saved, whether compression was applied)
+pub fn apply_hierarchical_compression(
+    messages: &mut Vec<Message>,
+    current_tokens: usize,
+    max_tokens: usize,
+    anchor_messages: &[(String, String)], // (content, reason)
+) -> (usize, bool) {
+    let tier = get_compression_tier(current_tokens, max_tokens);
+    
+    tracing::info!(
+        "Hierarchical compression: tier={} ({}% context, {}/{} tokens)",
+        tier.name(),
+        if max_tokens > 0 { (current_tokens as f32 / max_tokens as f32 * 100.0) as usize } else { 0 },
+        current_tokens,
+        max_tokens
+    );
+    
+    let mut total_saved = 0usize;
+    
+    match tier {
+        CompressionTier::Working => {
+            // Tier 1: Selective pruning only - zero-cost observation masking
+            let saved = apply_observation_masking(messages, 3);
+            total_saved += saved;
+            
+            if saved > 0 {
+                tracing::info!("Tier 1 (Working): Observation masking saved {} chars", saved);
+            }
+        }
+        
+        CompressionTier::Compressed => {
+            // Tier 2: Incremental summarization approach
+            // First apply observation masking, then truncate old messages
+            let saved_masking = apply_observation_masking(messages, 2);
+            total_saved += saved_masking;
+            
+            // Keep: last 3 messages + system prompt + anchor messages
+            let msg_count = messages.len();
+            let preserve_count = 4.min(msg_count); // Last 3 + potential system
+            
+            if msg_count > preserve_count + 2 {
+                // Create summary placeholder for middle messages
+                let middle_count = msg_count - preserve_count - 1;
+                
+                // Truncate old messages beyond anchors
+                // Keep system (if exists), recent messages
+                let system_msg = messages.first()
+                    .filter(|m| m.role == MessageRole::System)
+                    .cloned();
+                
+                let recent: Vec<_> = messages.iter()
+                    .rev()
+                    .take(preserve_count)
+                    .cloned()
+                    .collect();
+                
+                // Build new message list with summary
+                let summary_msg = Message {
+                    role: MessageRole::System,
+                    content: format!(
+                        "[{} messages compressed via incremental summarization]",
+                        middle_count
+                    ),
+                };
+                
+                messages.clear();
+                if let Some(sys) = system_msg {
+                    messages.push(sys);
+                }
+                messages.push(summary_msg);
+                messages.extend(recent.into_iter().rev());
+                
+                let saved_truncate = msg_count * 200; // Rough estimate
+                total_saved += saved_truncate;
+                
+                tracing::info!(
+                    "Tier 2 (Compressed): {} msgs summarized, {} total chars saved",
+                    middle_count,
+                    total_saved
+                );
+            }
+        }
+        
+        CompressionTier::Archived | CompressionTier::Critical => {
+            // Tier 3: Aggressive truncation - keep anchors + last 2 messages
+            let msg_count = messages.len();
+            
+            // Preserve: last 2 messages + anchor messages as system notes
+            let keep_recent = 2.min(msg_count);
+            
+            // Build anchor content
+            let anchor_content: String = if !anchor_messages.is_empty() {
+                format!(
+                    "\n\n[ANCHORED CONTEXT - PRESERVED]\n{}",
+                    anchor_messages
+                        .iter()
+                        .map(|(content, reason)| format!("- {}: {}", reason, content))
+                        .collect::<Vec<_>>()
+                        .join("\n")
+                )
+            } else {
+                String::new()
+            };
+            
+            // Get last messages
+            let recent: Vec<_> = messages.iter()
+                .rev()
+                .take(keep_recent)
+                .cloned()
+                .collect();
+            
+            // Clear and rebuild with anchors
+            messages.clear();
+            
+            if !anchor_content.is_empty() {
+                messages.push(Message {
+                    role: MessageRole::System,
+                    content: format!(
+                        "[{} previous messages archived - critical context preserved]{}",
+                        msg_count.saturating_sub(keep_recent),
+                        anchor_content
+                    ),
+                });
+            }
+            
+            messages.extend(recent.into_iter().rev());
+            
+            let saved_archived = msg_count * 300; // Rough estimate
+            total_saved += saved_archived;
+            
+            tracing::info!(
+                "Tier 3 (Archived): Aggressive truncation, {} total chars saved",
+                total_saved
+            );
+        }
+    }
+    
+    (total_saved, total_saved > 0)
+}
+
 #[component]
 pub fn ChatView() -> Element {
     let app_state = use_context::<AppState>();
@@ -274,64 +559,59 @@ pub fn ChatView() -> Element {
                         prompt_messages
                     };
 
-                    // === PROACTIVE COMPRESSION ===
+                    // === PROACTIVE COMPRESSION (3-Tier Hierarchical) ===
                     // Check if we're approaching context limit BEFORE generation
+                    // Using tiered thresholds: 40% → Working, 60% → Compressed, 80% → Archived
                     let estimated_tokens: usize = prompt_messages.iter()
                         .map(|m| m.content.len() / 4)
                         .sum();
-                    let threshold = (params.max_context_size as usize) * 75 / 100;
+                    let max_context = params.max_context_size as usize;
+                    let tier = get_compression_tier(estimated_tokens, max_context);
                     
-                    if estimated_tokens > threshold && compression_count == 0 {
+                    // Apply hierarchical compression based on tier (only if not already compressed this session)
+                    if tier != CompressionTier::Working && compression_count == 0 {
                         tracing::info!(
-                            "Proactive compression: {}% capacity ({}/{} tokens)",
-                            estimated_tokens * 100 / params.max_context_size as usize,
+                            "Proactive hierarchical compression: tier={} ({}% capacity, {}/{} tokens)",
+                            tier.name(),
+                            if max_context > 0 { (estimated_tokens as f32 / max_context as f32 * 100.0) as usize } else { 0 },
                             estimated_tokens,
-                            params.max_context_size
+                            max_context
                         );
                         
-                        // Apply zero-cost pruning to messages signal
-                        {
-                            let mut msgs = messages.write();
-                            let msg_count = msgs.len();
-                            
-                            // Truncate long system messages
-                            for msg in msgs.iter_mut() {
-                                if msg.content.len() > 2000 {
-                                    msg.content = format!(
-                                        "{}...\n[Tronqué: {} caractères originaux]",
-                                        &msg.content.chars().take(1500).collect::<String>(),
-                                        msg.content.len()
-                                    );
-                                }
-                            }
-                            
-                            // Keep only recent messages if too many
-                            if msg_count > 6 {
-                                let keep = 4;
-                                let summary = format!(
-                                    "[{} messages précédents compressés]",
-                                    msg_count - keep
-                                );
-                                let recent: Vec<_> = msgs.iter().rev().take(keep).cloned().collect();
-                                msgs.clear();
-                                msgs.push(Message {
-                                    role: MessageRole::System,
-                                    content: summary,
-                                });
-                                msgs.extend(recent.into_iter().rev());
-                            }
-                        }
+                        // Get anchor messages from agent context
+                        let anchors = agent_ctx.get_anchors();
+                        let anchor_tuples: Vec<(String, String)> = anchors
+                            .iter()
+                            .map(|a| (a.content.clone(), format!("{:?}", a.reason)))
+                            .collect();
                         
-                        compression_count += 1;
-
-                        // Notify user
-                        messages.write().push(Message {
-                            role: MessageRole::System,
-                            content: "💾 Compression proactive du contexte appliquée.".to_string(),
-                        });
-
-                        // Restart loop to rebuild prompt_messages from compressed messages
-                        continue;
+                        // Apply hierarchical compression
+                        let (saved, applied) = {
+                            let mut msgs = messages.write();
+                            apply_hierarchical_compression(
+                                &mut msgs,
+                                estimated_tokens,
+                                max_context,
+                                &anchor_tuples,
+                            )
+                        };
+                        
+                        if applied {
+                            compression_count += 1;
+                            
+                            // Notify user
+                            messages.write().push(Message {
+                                role: MessageRole::System,
+                                content: format!(
+                                    "💾 Hierarchical compression applied (tier: {}, ~{} chars saved).",
+                                    tier.name(),
+                                    saved
+                                ),
+                            });
+                            
+                            // Restart loop to rebuild prompt_messages from compressed messages
+                            continue;
+                        }
                     }
 
                     // Generate response
@@ -439,7 +719,7 @@ pub fn ChatView() -> Element {
                         }
                     }
 
-                    // === OPTIMIZED CONTEXT COMPRESSION ===
+                    // === POST-TRUNCATION HIERARCHICAL COMPRESSION ===
                     // If response was truncated due to context saturation, apply smart compression
                     if was_truncated && !app_state.stop_signal.load(Ordering::Relaxed) {
                         // Guard: allow proactive + post-truncation (2 total) before stopping
@@ -447,22 +727,67 @@ pub fn ChatView() -> Element {
                             tracing::warn!("Already compressed {} times this session, stopping to avoid loop", compression_count);
                             break;
                         }
-                        compression_count += 1;
                         
                         let msg_count = messages.read().len();
                         let total_chars: usize = messages.read().iter().map(|m| m.content.len()).sum();
+                        let estimated_tokens = total_chars / 4;
+                        let max_context = params.max_context_size as usize;
                         
-                        tracing::info!("Context saturated ({} msgs, {} chars), applying compression", msg_count, total_chars);
+                        tracing::info!(
+                            "Post-truncation compression: {} msgs, {} chars, {}% capacity",
+                            msg_count,
+                            total_chars,
+                            if max_context > 0 { (estimated_tokens as f32 / max_context as f32 * 100.0) as usize } else { 0 }
+                        );
                         
-                        // === PHASE 1: ZERO-COST PRUNING (no LLM) ===
-                        // Truncate long system messages (tool results, etc.) - they're already processed
+                        // Get current tier
+                        let tier = get_compression_tier(estimated_tokens, max_context);
+                        
+                        // Get anchor messages from agent context
+                        let anchors = agent_ctx.get_anchors();
+                        let anchor_tuples: Vec<(String, String)> = anchors
+                            .iter()
+                            .map(|a| (a.content.clone(), format!("{:?}", a.reason)))
+                            .collect();
+                        
+                        // Apply hierarchical compression based on tier
+                        let (saved, applied) = {
+                            let mut msgs = messages.write();
+                            apply_hierarchical_compression(
+                                &mut msgs,
+                                estimated_tokens,
+                                max_context,
+                                &anchor_tuples,
+                            )
+                        };
+                        
+                        if applied {
+                            // Notify user
+                            messages.write().push(Message {
+                                role: MessageRole::System,
+                                content: format!(
+                                    "💾 Post-truncation compression applied (tier: {}, ~{} chars saved).",
+                                    tier.name(),
+                                    saved
+                                ),
+                            });
+                            
+                            // Retry generation with compressed context
+                            continue;
+                        }
+                        
+                        // === FALLBACK: Legacy compression if hierarchical didn't apply ===
+                        // (kept for backward compatibility)
+                        
+                        tracing::info!("Context saturated ({} msgs, {} chars), applying legacy compression", msg_count, total_chars);
+                        
+                        // Phase 1: Zero-cost pruning
                         let mut chars_saved = 0usize;
                         {
                             let mut msgs = messages.write();
                             for msg in msgs.iter_mut() {
                                 if msg.role == MessageRole::System && msg.content.len() > 2000 {
                                     let original_len = msg.content.len();
-                                    // Keep first 500 chars + indicator
                                     let truncated = format!(
                                         "{}...\n\n[Contenu tronqué - {} caractères]",
                                         &msg.content[..500.min(msg.content.len())],

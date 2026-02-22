@@ -131,7 +131,12 @@ pub fn extract_tool_call(text: &str) -> Option<ToolCall> {
 fn parse_tool_call_json(input: &str) -> Option<ToolCall> {
     let value: Value = serde_json::from_str(input).ok()?;
     let obj = value.as_object()?;
-    let tool = obj.get("tool").and_then(|v| v.as_str())?.to_string();
+    // Support both "tool" and "name" fields for tool call format
+    let tool = obj
+        .get("tool")
+        .and_then(|v| v.as_str())
+        .or_else(|| obj.get("name").and_then(|v| v.as_str()))?
+        .to_string();
     let params = obj
         .get("params")
         .cloned()

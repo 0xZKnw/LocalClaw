@@ -41,11 +41,11 @@ jobs:
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: clawrs-macos-x64
-            features: ""
+            features: "--features metal"
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: clawrs-macos-arm64
-            features: ""
+            features: "--features metal"
 
     steps:
       - name: Checkout code
