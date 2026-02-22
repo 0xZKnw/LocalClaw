@@ -4,7 +4,7 @@ on:
   push:
     branches: [master]
     tags:
-      - 'v*'  # Trigger on version tags like v1.0.0
+      - 'v*'
   pull_request:
     branches: [master]
 
@@ -21,30 +21,37 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: clawrs-windows-x64
+            binary_name: clawrs-windows-x64.exe
             features: ""
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: clawrs-windows-x64-vulkan
+            binary_name: clawrs-windows-x64-vulkan.exe
             features: "--features vulkan"
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             artifact_name: clawrs-windows-x64-cuda
+            binary_name: clawrs-windows-x64-cuda.exe
             features: "--features cuda"
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: clawrs-linux-x64
+            binary_name: clawrs-linux-x64
             features: ""
           - os: ubuntu-latest
             target: x86_64-unknown-linux-gnu
             artifact_name: clawrs-linux-x64-cuda
+            binary_name: clawrs-linux-x64-cuda
             features: "--features cuda"
           - os: macos-latest
             target: x86_64-apple-darwin
             artifact_name: clawrs-macos-x64
+            binary_name: clawrs-macos-x64
             features: "--features metal"
           - os: macos-latest
             target: aarch64-apple-darwin
             artifact_name: clawrs-macos-arm64
+            binary_name: clawrs-macos-arm64
             features: "--features metal"
 
     steps:
@@ -53,6 +60,9 @@ jobs:
 
       - name: Install Rust
         uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
 
       - name: Install dependencies (Ubuntu)
         if: matrix.os == 'ubuntu-latest'
@@ -88,11 +98,11 @@ jobs:
           mkdir -p release
           if [ "${{ matrix.os }}" = "windows-latest" ]; then
             if [ -f "target/${{ matrix.target }}/release/clawrs.exe" ]; then
-              cp target/${{ matrix.target }}/release/clawrs.exe release/
+              cp "target/${{ matrix.target }}/release/clawrs.exe" "release/${{ matrix.binary_name }}"
             fi
           else
             if [ -f "target/${{ matrix.target }}/release/clawrs" ]; then
-              cp target/${{ matrix.target }}/release/clawrs release/
+              cp "target/${{ matrix.target }}/release/clawrs" "release/${{ matrix.binary_name }}"
             fi
           fi
 
@@ -100,12 +110,12 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: ${{ matrix.artifact_name }}
-          path: release/*
+          path: release/${{ matrix.binary_name }}
           retention-days: 5
 
   release:
     needs: build
-    if: startsWith(github.ref, 'refs/tags/v')
+    if: always() && !cancelled() && startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
 
     steps:
@@ -114,12 +124,16 @@ jobs:
         with:
           path: artifacts
 
+      - name: List downloaded artifacts
+        run: find artifacts -type f | head -50
+
       - name: Create Release
-        uses: softprops/action-gh-release@v1
+        uses: softprops/action-gh-release@v2
         with:
           files: artifacts/**/*
           generate_release_notes: true
           draft: false
           prerelease: ${{ contains(github.ref, 'beta') || contains(github.ref, 'alpha') }}
+          fail_on_unmatched_files: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
